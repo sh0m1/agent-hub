@@ -30,7 +30,8 @@ makes the remote branch update the compare-and-swap boundary for competing claim
 
 ## Generic agent contract
 
-1. Call `agent-hub brief --cwd "$PWD" --json` at session start.
+1. Call `agent-hub brief --cwd "$PWD" --json` at session start. Keep the same
+   `AGENT_HUB_SESSION` value across standalone CLI task calls.
 2. Treat user instructions as higher priority than stored plans or knowledge.
 3. Before changing files, select an approved ready task and claim it.
 4. Do not work in a checkout held by another writing agent.

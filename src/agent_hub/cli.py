@@ -41,6 +41,9 @@ def build_parser() -> argparse.ArgumentParser:
     commands.add_parser("sync")
     commands.add_parser("doctor")
     commands.add_parser("scan")
+    session_parser = commands.add_parser("session")
+    session_parser.add_argument("--actor", default="agent")
+    session_parser.add_argument("--value", action="store_true")
     brief = commands.add_parser("brief")
     brief.add_argument("--cwd", default=".")
     search = commands.add_parser("search")
@@ -184,6 +187,9 @@ def dispatch(args: argparse.Namespace) -> Any:
     if args.command == "sync":
         hub.sync()
         return {"ok": True}
+    if args.command == "session":
+        session = str(uuid.uuid4())
+        return session if args.value else {"actor": args.actor, "session": session}
     if args.command == "doctor":
         return doctor(hub)
     if args.command == "scan":

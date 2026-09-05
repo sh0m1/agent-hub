@@ -12,3 +12,7 @@ def test_managed_instruction_block_is_idempotent_and_preserves_existing(tmp_path
     assert path.read_text(encoding="utf-8") == first
     assert "Keep me." in first
     assert INSTRUCTIONS.strip() in first
+
+
+def test_managed_instructions_require_a_stable_cli_session() -> None:
+    assert "stable session ID" in INSTRUCTIONS

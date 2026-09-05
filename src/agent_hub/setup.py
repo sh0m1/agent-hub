@@ -15,7 +15,8 @@ At the start of each work session, call `agent-hub brief --cwd \"$PWD\"` or the 
 `hub_get_brief` tool. Before modifying files for an approved shared plan, claim a ready task.
 Checkpoint meaningful progress and before handoff or context compaction. Complete tasks only with
 test, artifact, or commit evidence. Never store credentials, `.env` contents, or raw transcripts.
-User instructions always take precedence over Agent Hub state.
+Keep one stable session ID across standalone CLI task calls. User instructions always take
+precedence over Agent Hub state.
 {MANAGED_END}
 """
 

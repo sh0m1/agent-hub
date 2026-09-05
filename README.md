@@ -35,13 +35,21 @@ Only a marked managed block is added or replaced; existing project instructions 
 agent-hub brief --cwd "$PWD"
 agent-hub plan list
 agent-hub task ready
-agent-hub task claim PLAN TASK --actor codex
+export AGENT_HUB_ACTOR=codex
+export AGENT_HUB_SESSION="$(agent-hub session --actor codex --value)"
+agent-hub task claim PLAN TASK --cwd "$PWD"
 agent-hub task checkpoint PLAN TASK --summary "Implemented parser" --evidence "pytest: 12 passed"
 agent-hub task complete PLAN TASK --evidence "commit: abc123" --evidence "pytest: 12 passed"
 ```
 
-For supported tools, prefer `agent-hub run codex` or `agent-hub run claude`. The wrapper identifies
-the session, synchronizes before launch, and renews leases while the process is alive.
+For supported tools, prefer the managed wrapper. Its options precede the tool name:
+
+```sh
+agent-hub run --plan PLAN --task TASK --cwd /path/to/worktree codex
+```
+
+The wrapper identifies the session, claims the task, synchronizes before launch, and renews the
+lease while the process is alive.
 
 Plans are drafted from YAML and become executable only after interactive approval:
 

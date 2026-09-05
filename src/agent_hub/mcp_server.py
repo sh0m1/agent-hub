@@ -121,9 +121,10 @@ def hub_add_knowledge(
     title: str,
     body: str,
     supersedes: str | None = None,
+    kind: str = "fact",
 ) -> dict:
     """Add a versioned knowledge entry after secret and size validation."""
-    return hub().add_knowledge(scope, key, title, body, ACTOR, SESSION, supersedes)
+    return hub().add_knowledge(scope, key, title, body, ACTOR, SESSION, supersedes, kind=kind)
 
 
 def main() -> None:

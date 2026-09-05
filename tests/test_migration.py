@@ -18,3 +18,6 @@ def test_remember_migration_is_archived_and_omits_empty_now(hub_repo: Path, tmp_
     assert "historical provenance" in text
     assert "Finished work" in text
     assert "now.md" not in text
+    assert "kind: archive" in text
+    assert "Finished work" not in Hub(hub_repo).brief(Path("/tmp"))
+    assert Hub(hub_repo).search("Finished work")

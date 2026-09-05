@@ -10,6 +10,9 @@ Project identity is the normalized `remote.origin.url`. Local paths are machine 
 are not committed. Knowledge resolves from global to workspace to project scope; entries with the
 same key must explicitly supersede an earlier entry.
 
+Knowledge kinds are `fact`, `decision`, `preference`, and `archive`. Archives remain searchable but
+are omitted from the bounded startup brief.
+
 ## Plans and tasks
 
 Plan revisions are immutable. Agents may draft a plan or a new revision. Only the interactive CLI

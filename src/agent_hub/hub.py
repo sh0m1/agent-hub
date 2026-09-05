@@ -427,10 +427,13 @@ class Hub:
         session: str,
         supersedes: str | None = None,
         status: str = "active",
+        kind: str = "fact",
     ) -> dict[str, Any]:
         validate_content(f"{title}\n{body}", "knowledge.md")
         if scope != "global" and not scope.startswith(("project:", "workspace:")):
             raise ValueError("Scope must be global, project:<id>, or workspace:<id>")
+        if kind not in {"fact", "decision", "preference", "archive"}:
+            raise ValueError("Knowledge kind must be fact, decision, preference, or archive")
         entry_id = event_id()
 
         def operation(_: State) -> tuple[dict[str, Any], str]:
@@ -453,6 +456,7 @@ class Hub:
                 "created_by": actor,
                 "supersedes": supersedes,
                 "status": status,
+                "kind": kind,
             }
             content = f"---\n{yaml.safe_dump(metadata, sort_keys=False)}---\n\n{body.strip()}\n"
             (directory / f"{entry_id}.md").write_text(content, encoding="utf-8")
@@ -484,6 +488,7 @@ class Hub:
             session,
             supersedes=str(latest),
             status="retired",
+            kind="fact",
         )
 
     def search(self, query: str, limit: int = 20) -> list[dict[str, str]]:
@@ -494,7 +499,7 @@ class Hub:
         root = self.root / "memory" / "knowledge"
         if not root.exists():
             return []
-        for entry in self._current_knowledge():
+        for entry in self._current_knowledge(include_archives=True):
             path = entry["path"]
             text = entry["text"]
             lowered = text.lower()
@@ -555,7 +560,7 @@ class Hub:
             return result
         return encoded[: max_bytes - 32].decode("utf-8", errors="ignore") + "\n[brief truncated]\n"
 
-    def _current_knowledge(self) -> list[dict[str, Any]]:
+    def _current_knowledge(self, include_archives: bool = False) -> list[dict[str, Any]]:
         root = self.root / "memory" / "knowledge"
         if not root.exists():
             return []
@@ -568,6 +573,8 @@ class Hub:
             metadata = read_frontmatter(path)
             if metadata.get("status", "active") != "active":
                 continue
+            if metadata.get("kind") == "archive" and not include_archives:
+                continue
             text = path.read_text(encoding="utf-8")
             body = text.split("---", 2)[-1].strip() if text.startswith("---") else text.strip()
             entries.append(
@@ -577,6 +584,7 @@ class Hub:
                     "body": body,
                     "key": metadata.get("key", directory.name),
                     "scope_path": str(directory.parent.relative_to(root)),
+                    "kind": metadata.get("kind", "fact"),
                 }
             )
         return entries

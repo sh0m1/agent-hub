@@ -12,7 +12,7 @@ from typing import Any
 
 from .adapters import install_adapters
 from .git import is_managed_clone, run_git
-from .hub import Hub
+from .hub import Hub, read_frontmatter
 from .setup import setup
 from .state import load_plan
 
@@ -78,6 +78,9 @@ def build_parser() -> argparse.ArgumentParser:
     add.add_argument("--title", required=True)
     add.add_argument("--body-file", required=True)
     add.add_argument("--supersedes")
+    add.add_argument(
+        "--kind", choices=("fact", "decision", "preference", "archive"), default="fact"
+    )
     add.add_argument("--actor")
     add.add_argument("--session")
     retire = knowledge_commands.add_parser("retire")
@@ -205,6 +208,7 @@ def dispatch(args: argparse.Namespace) -> Any:
             actor,
             session,
             args.supersedes,
+            kind=args.kind,
         )
     if args.command == "plan":
         if args.plan_command == "draft":
@@ -354,6 +358,11 @@ def migrate_remember(hub: Hub, source: Path, project: str, actor: str) -> dict[s
             sections.extend([f"## {path.name}", content])
     if len(sections) == 1:
         raise ValueError("No remember journal content found")
+    directory = hub.root / "memory" / "knowledge" / "project" / project / "legacy-remember-archive"
+    revisions = sorted(directory.glob("*.md")) if directory.exists() else []
+    supersedes = None
+    if revisions:
+        supersedes = str(read_frontmatter(revisions[-1])["id"])
     return hub.add_knowledge(
         f"project:{project}",
         "legacy-remember-archive",
@@ -361,4 +370,6 @@ def migrate_remember(hub: Hub, source: Path, project: str, actor: str) -> dict[s
         "\n\n".join(sections),
         actor,
         str(uuid.uuid4()),
+        supersedes=supersedes,
+        kind="archive",
     )

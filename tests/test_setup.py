@@ -1,0 +1,14 @@
+from pathlib import Path
+
+from agent_hub.setup import INSTRUCTIONS, merge_managed_block
+
+
+def test_managed_instruction_block_is_idempotent_and_preserves_existing(tmp_path: Path) -> None:
+    path = tmp_path / "AGENTS.md"
+    path.write_text("# Existing\n\nKeep me.\n", encoding="utf-8")
+    merge_managed_block(path)
+    first = path.read_text(encoding="utf-8")
+    merge_managed_block(path)
+    assert path.read_text(encoding="utf-8") == first
+    assert "Keep me." in first
+    assert INSTRUCTIONS.strip() in first

@@ -1,0 +1,352 @@
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import threading
+import uuid
+from pathlib import Path
+from typing import Any
+
+from .git import is_managed_clone, run_git
+from .hub import Hub
+from .setup import setup
+from .state import load_plan
+
+
+def actor_session(args: argparse.Namespace) -> tuple[str, str]:
+    actor = getattr(args, "actor", None) or os.environ.get("AGENT_HUB_ACTOR", "agent")
+    session = getattr(args, "session", None) or os.environ.get(
+        "AGENT_HUB_SESSION", str(uuid.uuid4())
+    )
+    return actor, session
+
+
+def emit(value: Any, as_json: bool = False) -> None:
+    if as_json or not isinstance(value, str):
+        print(json.dumps(value, indent=2, sort_keys=True))
+    else:
+        print(value, end="" if value.endswith("\n") else "\n")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="agent-hub")
+    parser.add_argument("--repo", help="Agent Hub runtime clone")
+    parser.add_argument("--json", action="store_true")
+    commands = parser.add_subparsers(dest="command", required=True)
+
+    commands.add_parser("sync")
+    commands.add_parser("doctor")
+    commands.add_parser("scan")
+    brief = commands.add_parser("brief")
+    brief.add_argument("--cwd", default=".")
+    search = commands.add_parser("search")
+    search.add_argument("query")
+
+    migrate = commands.add_parser("migrate-remember")
+    migrate.add_argument("path")
+    migrate.add_argument("--project", required=True)
+    migrate.add_argument("--actor", default="migration")
+
+    setup_parser = commands.add_parser("setup")
+    setup_parser.add_argument("--remote", required=True)
+    setup_parser.add_argument("--runtime", default="~/.local/share/agent-hub/repo")
+    setup_parser.add_argument("--keep-claude-memory", action="store_true")
+
+    project = commands.add_parser("project")
+    project_commands = project.add_subparsers(dest="project_command", required=True)
+    register = project_commands.add_parser("register")
+    register.add_argument("path")
+    register.add_argument("--workspace")
+
+    knowledge = commands.add_parser("knowledge")
+    knowledge_commands = knowledge.add_subparsers(dest="knowledge_command", required=True)
+    add = knowledge_commands.add_parser("add")
+    add.add_argument("--scope", required=True)
+    add.add_argument("--key", required=True)
+    add.add_argument("--title", required=True)
+    add.add_argument("--body-file", required=True)
+    add.add_argument("--supersedes")
+    add.add_argument("--actor")
+    add.add_argument("--session")
+    retire = knowledge_commands.add_parser("retire")
+    retire.add_argument("--scope", required=True)
+    retire.add_argument("--key", required=True)
+    retire.add_argument("--reason", required=True)
+    retire.add_argument("--actor")
+    retire.add_argument("--session")
+
+    plan = commands.add_parser("plan")
+    plan_commands = plan.add_subparsers(dest="plan_command", required=True)
+    draft = plan_commands.add_parser("draft")
+    draft.add_argument("source")
+    draft.add_argument("--actor")
+    draft.add_argument("--session")
+    approve = plan_commands.add_parser("approve")
+    approve.add_argument("plan_id")
+    approve.add_argument("--revision", type=int)
+    approve.add_argument("--yes", action="store_true")
+    cancel = plan_commands.add_parser("cancel")
+    cancel.add_argument("plan_id")
+    cancel.add_argument("--reason", required=True)
+    cancel.add_argument("--yes", action="store_true")
+    plan_commands.add_parser("list")
+    show = plan_commands.add_parser("show")
+    show.add_argument("plan_id")
+    show.add_argument("--revision", type=int)
+
+    task = commands.add_parser("task")
+    task_commands = task.add_subparsers(dest="task_command", required=True)
+    ready = task_commands.add_parser("ready")
+    ready.add_argument("--plan")
+    for name in ("claim", "release"):
+        command = task_commands.add_parser(name)
+        command.add_argument("plan_id")
+        command.add_argument("task_id")
+        command.add_argument("--actor")
+        command.add_argument("--session")
+        if name == "claim":
+            command.add_argument("--cwd", default=".")
+    checkpoint = task_commands.add_parser("checkpoint")
+    checkpoint.add_argument("plan_id")
+    checkpoint.add_argument("task_id")
+    checkpoint.add_argument("--summary", required=True)
+    checkpoint.add_argument("--evidence", action="append", default=[])
+    checkpoint.add_argument("--actor")
+    checkpoint.add_argument("--session")
+    block = task_commands.add_parser("block")
+    block.add_argument("plan_id")
+    block.add_argument("task_id")
+    block.add_argument("--reason", required=True)
+    block.add_argument("--actor")
+    block.add_argument("--session")
+    unblock = task_commands.add_parser("unblock")
+    unblock.add_argument("plan_id")
+    unblock.add_argument("task_id")
+    unblock.add_argument("--resolution", required=True)
+    unblock.add_argument("--actor")
+    unblock.add_argument("--session")
+    complete = task_commands.add_parser("complete")
+    complete.add_argument("plan_id")
+    complete.add_argument("task_id")
+    complete.add_argument("--summary", default="Completed")
+    complete.add_argument("--evidence", action="append", default=[])
+    complete.add_argument("--actor")
+    complete.add_argument("--session")
+
+    run = commands.add_parser("run")
+    run.add_argument("tool")
+    run.add_argument("--actor")
+    run.add_argument("--plan")
+    run.add_argument("--task")
+    run.add_argument("--cwd", default=".")
+    run.add_argument("args", nargs=argparse.REMAINDER)
+    return parser
+
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+    try:
+        result = dispatch(args)
+        if result is not None:
+            emit(result, args.json)
+    except Exception as exc:
+        if args.json:
+            emit({"ok": False, "error": str(exc)}, True)
+        else:
+            print(f"agent-hub: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+
+
+def dispatch(args: argparse.Namespace) -> Any:
+    if args.command == "setup":
+        setup(args.remote, Path(args.runtime), not args.keep_claude_memory)
+        return {"ok": True, "runtime": str(Path(args.runtime).expanduser())}
+    hub = Hub.from_environment(args.repo)
+    if args.command == "sync":
+        hub.sync()
+        return {"ok": True}
+    if args.command == "doctor":
+        return doctor(hub)
+    if args.command == "scan":
+        return hub.scan()
+    if args.command == "brief":
+        return hub.brief(Path(args.cwd))
+    if args.command == "search":
+        return hub.search(args.query)
+    if args.command == "migrate-remember":
+        return migrate_remember(hub, Path(args.path), args.project, args.actor)
+    if args.command == "project":
+        return hub.register_project(Path(args.path), args.workspace)
+    if args.command == "knowledge":
+        actor, session = actor_session(args)
+        if args.knowledge_command == "retire":
+            return hub.retire_knowledge(args.scope, args.key, args.reason, actor, session)
+        return hub.add_knowledge(
+            args.scope,
+            args.key,
+            args.title,
+            Path(args.body_file).read_text(encoding="utf-8"),
+            actor,
+            session,
+            args.supersedes,
+        )
+    if args.command == "plan":
+        if args.plan_command == "draft":
+            actor, session = actor_session(args)
+            return hub.draft_plan(Path(args.source), actor, session)
+        if args.plan_command == "approve":
+            if os.environ.get("AGENT_HUB_AGENT_SESSION"):
+                raise ValueError("Plan approval is unavailable inside a managed agent session")
+            if not args.yes:
+                if not sys.stdin.isatty():
+                    raise ValueError("Plan approval requires an interactive terminal or --yes")
+                answer = input(f"Approve plan {args.plan_id}? Type its id: ")
+                if answer != args.plan_id:
+                    raise ValueError("Approval cancelled")
+            return hub.approve_plan(args.plan_id, args.revision)
+        if args.plan_command == "cancel":
+            if os.environ.get("AGENT_HUB_AGENT_SESSION"):
+                raise ValueError("Plan cancellation is unavailable inside an agent session")
+            require_human_confirmation(args.plan_id, args.yes, "cancel")
+            return hub.cancel_plan(args.plan_id, args.reason)
+        if args.plan_command == "list":
+            return hub.list_plans()
+        return load_plan(hub.root, args.plan_id, args.revision)
+    if args.command == "task":
+        if args.task_command == "ready":
+            return hub.ready_tasks(args.plan)
+        actor, session = actor_session(args)
+        if args.task_command == "claim":
+            return hub.claim_task(args.plan_id, args.task_id, actor, session, Path(args.cwd))
+        if args.task_command == "checkpoint":
+            return hub.checkpoint_task(
+                args.plan_id, args.task_id, actor, session, args.summary, args.evidence
+            )
+        if args.task_command == "block":
+            return hub.block_task(args.plan_id, args.task_id, actor, session, args.reason)
+        if args.task_command == "unblock":
+            return hub.unblock_task(args.plan_id, args.task_id, actor, session, args.resolution)
+        if args.task_command == "release":
+            return hub.release_task(args.plan_id, args.task_id, actor, session)
+        return hub.complete_task(
+            args.plan_id, args.task_id, actor, session, args.summary, args.evidence
+        )
+    if args.command == "run":
+        return run_agent(
+            hub,
+            args.tool,
+            args.args,
+            args.actor or args.tool,
+            args.plan,
+            args.task,
+            Path(args.cwd),
+        )
+    raise ValueError(f"Unsupported command: {args.command}")
+
+
+def doctor(hub: Hub) -> dict[str, Any]:
+    checks: dict[str, Any] = {"root": str(hub.root), "managed_clone": is_managed_clone(hub.root)}
+    checks["git"] = run_git(hub.root, "status", "--porcelain").stdout.strip() == ""
+    checks["scan"] = hub.scan()["errors"] == 0
+    checks["queued_checkpoints"] = len(list(hub._outbox_root().glob("*.json")))
+    checks["codex_instructions"] = Path("~/.codex/AGENTS.md").expanduser().exists()
+    checks["claude_instructions"] = Path("~/.claude/CLAUDE.md").expanduser().exists()
+    checks["ok"] = all(
+        value for key, value in checks.items() if key not in {"root", "queued_checkpoints"}
+    )
+    return checks
+
+
+def require_human_confirmation(identifier: str, yes: bool, action: str) -> None:
+    if yes:
+        return
+    if not sys.stdin.isatty():
+        raise ValueError(f"Plan {action} requires an interactive terminal or --yes")
+    answer = input(f"{action.title()} plan {identifier}? Type its id: ")
+    if answer != identifier:
+        raise ValueError(f"Plan {action} cancelled")
+
+
+def run_agent(
+    hub: Hub,
+    tool: str,
+    trailing: list[str],
+    actor: str,
+    plan_id: str | None,
+    task_id: str | None,
+    cwd: Path,
+) -> dict[str, Any]:
+    if bool(plan_id) != bool(task_id):
+        raise ValueError("--plan and --task must be supplied together")
+    hub.sync()
+    session = str(uuid.uuid4())
+    if plan_id and task_id:
+        hub.claim_task(plan_id, task_id, actor, session, cwd)
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "AGENT_HUB_REPO": str(hub.root),
+            "AGENT_HUB_ACTOR": actor,
+            "AGENT_HUB_SESSION": session,
+            "AGENT_HUB_AGENT_SESSION": "1",
+        }
+    )
+    stopped = threading.Event()
+
+    def heartbeat() -> None:
+        while not stopped.wait(600):
+            try:
+                if plan_id and task_id:
+                    hub.heartbeat_task(plan_id, task_id, actor, session)
+                else:
+                    hub.sync()
+            except Exception:
+                continue
+
+    thread = threading.Thread(target=heartbeat, daemon=True)
+    thread.start()
+    try:
+        completed = subprocess.run([tool, *trailing], check=False, env=environment, cwd=cwd)
+    finally:
+        stopped.set()
+        thread.join(timeout=1)
+    if plan_id and task_id:
+        hub.checkpoint_task(
+            plan_id,
+            task_id,
+            actor,
+            session,
+            f"Managed {tool} session exited with code {completed.returncode}",
+            [f"process-exit:{completed.returncode}"],
+        )
+    return {"session": session, "exit_code": completed.returncode}
+
+
+def migrate_remember(hub: Hub, source: Path, project: str, actor: str) -> dict[str, Any]:
+    files = sorted(
+        path for path in source.glob("*.md") if path.name != "now.md" or path.stat().st_size
+    )
+    sections: list[str] = [
+        "Imported as historical provenance. Status words in this archive are not current "
+        "task state."
+    ]
+    for path in files:
+        if path.name == "RESUME.md":
+            continue
+        content = path.read_text(encoding="utf-8").strip()
+        if content:
+            sections.extend([f"## {path.name}", content])
+    if len(sections) == 1:
+        raise ValueError("No remember journal content found")
+    return hub.add_knowledge(
+        f"project:{project}",
+        "legacy-remember-archive",
+        "Legacy .remember archive",
+        "\n\n".join(sections),
+        actor,
+        str(uuid.uuid4()),
+    )

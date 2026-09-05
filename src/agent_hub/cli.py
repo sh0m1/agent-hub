@@ -10,6 +10,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from .adapters import install_adapters
 from .git import is_managed_clone, run_git
 from .hub import Hub
 from .setup import setup
@@ -54,6 +55,14 @@ def build_parser() -> argparse.ArgumentParser:
     setup_parser.add_argument("--remote", required=True)
     setup_parser.add_argument("--runtime", default="~/.local/share/agent-hub/repo")
     setup_parser.add_argument("--keep-claude-memory", action="store_true")
+
+    adapter = commands.add_parser("adapter")
+    adapter_commands = adapter.add_subparsers(dest="adapter_command", required=True)
+    adapter_install = adapter_commands.add_parser("install")
+    adapter_install.add_argument("path")
+    adapter_install.add_argument(
+        "--tools", default="agents,claude", help="Comma-separated adapter names"
+    )
 
     project = commands.add_parser("project")
     project_commands = project.add_subparsers(dest="project_command", required=True)
@@ -165,6 +174,9 @@ def dispatch(args: argparse.Namespace) -> Any:
     if args.command == "setup":
         setup(args.remote, Path(args.runtime), not args.keep_claude_memory)
         return {"ok": True, "runtime": str(Path(args.runtime).expanduser())}
+    if args.command == "adapter":
+        tools = [tool.strip() for tool in args.tools.split(",") if tool.strip()]
+        return {"written": install_adapters(Path(args.path), tools)}
     hub = Hub.from_environment(args.repo)
     if args.command == "sync":
         hub.sync()

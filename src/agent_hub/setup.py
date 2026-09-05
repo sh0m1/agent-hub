@@ -20,7 +20,7 @@ User instructions always take precedence over Agent Hub state.
 """
 
 
-def merge_managed_block(path: Path, content: str = INSTRUCTIONS) -> None:
+def merge_managed_block(path: Path, content: str = INSTRUCTIONS, backup: bool = True) -> None:
     existing = path.read_text(encoding="utf-8") if path.exists() else ""
     if MANAGED_START in existing and MANAGED_END in existing:
         before, rest = existing.split(MANAGED_START, 1)
@@ -31,7 +31,7 @@ def merge_managed_block(path: Path, content: str = INSTRUCTIONS) -> None:
     if updated == existing:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists():
+    if path.exists() and backup:
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         shutil.copy2(path, path.with_name(f"{path.name}.bak.{stamp}"))
     path.write_text(updated, encoding="utf-8")

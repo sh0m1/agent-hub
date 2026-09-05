@@ -21,6 +21,14 @@ agent-hub scan
 blocks to the Codex and Claude user instruction files, and configures the local MCP server. Existing
 configuration is preserved and backed up before it is changed.
 
+Add repository-level instructions for tools that do not load the user configuration:
+
+```sh
+agent-hub adapter install /path/to/project --tools agents,claude,gemini,cursor,copilot
+```
+
+Only a marked managed block is added or replaced; existing project instructions are preserved.
+
 ## Everyday workflow
 
 ```sh

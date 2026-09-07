@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from conftest import project
+from conftest import git, project
 
 from agent_hub.hub import Hub
 from agent_hub.policy import DEFAULT_POLICY_TEXT, PolicyError, parse_policy, policy_path
@@ -281,3 +281,27 @@ def test_without_policy_claims_record_model_and_null_tier(
     assert event["payload"]["tier"] is None
     undeclared = hub.claim_task("tiered", "review", "codex", "two", worktree)
     assert undeclared["payload"]["model"] is None
+
+
+def test_claim_rejects_task_tier_not_defined_in_policy(policy_hub: Path, tmp_path: Path) -> None:
+    hub = Hub(policy_hub)
+    _activate_tiered(hub, tmp_path)
+    worktree = project(tmp_path / "work")
+    record_session("one", "codex", "claude-sonnet-5", "standard")
+
+    policy_path(policy_hub).write_text(
+        """schema_version: 1
+default_task_tier: standard
+tiers:
+  standard:
+    models: ["claude-sonnet-*"]
+""",
+        encoding="utf-8",
+    )
+    git(policy_hub, "add", "memory")
+    git(policy_hub, "commit", "-m", "drop frontier")
+    git(policy_hub, "push", "origin", "HEAD:main")
+
+    with pytest.raises(ValueError, match="not defined in memory/policy/tiers.yaml"):
+        hub.claim_task("tiered", "review", "codex", "one", worktree)
+

@@ -385,6 +385,11 @@ class Hub:
         if tier == UNKNOWN_TIER:
             raise ValueError(f"Model '{model}' is not mapped to a tier in memory/policy/tiers.yaml")
         required = policy.task_tier(task)
+        if required not in policy.tiers:
+            raise ValueError(
+                f"Task {task_id} requires tier '{required}', which is not defined in "
+                "memory/policy/tiers.yaml"
+            )
         if tier == required:
             return model, tier, False
         if not allow_tier_mismatch:

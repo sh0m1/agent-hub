@@ -305,3 +305,14 @@ tiers:
     with pytest.raises(ValueError, match="not defined in memory/policy/tiers.yaml"):
         hub.claim_task("tiered", "review", "codex", "one", worktree)
 
+
+
+
+
+def test_matching_tier_override_stamps_false(policy_hub: Path, tmp_path: Path) -> None:
+    hub = Hub(policy_hub)
+    _activate_tiered(hub, tmp_path)
+    worktree = project(tmp_path / "work")
+    record_session("one", "codex", "claude-sonnet-5", "standard")
+    event = hub.claim_task("tiered", "exec", "codex", "one", worktree, allow_tier_mismatch=True)
+    assert event["payload"]["tier_override"] is False

@@ -6,6 +6,8 @@ import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
+from .hub import Hub
+
 MANAGED_START = "<!-- BEGIN AGENT HUB MANAGED -->"
 MANAGED_END = "<!-- END AGENT HUB MANAGED -->"
 INSTRUCTIONS = f"""{MANAGED_START}
@@ -44,6 +46,7 @@ def setup(remote: str, runtime: Path, disable_claude_memory: bool = True) -> Non
         runtime.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run(["git", "clone", remote, str(runtime)], check=True)
     (runtime / ".agent-hub-managed").touch()
+    Hub(runtime).ensure_policy()
     config = Path("~/.config/agent-hub/config.json").expanduser()
     config.parent.mkdir(parents=True, exist_ok=True)
     config.write_text(json.dumps({"repo": str(runtime), "remote": remote}, indent=2) + "\n")

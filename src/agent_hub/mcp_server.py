@@ -24,9 +24,13 @@ def hub() -> Hub:
 
 
 @mcp.tool()
-def hub_get_brief(cwd: str = ".") -> str:
-    """Get bounded global and project context plus active plans and task state."""
-    return hub().brief(Path(cwd))
+def hub_get_brief(cwd: str = ".", model: str | None = None) -> str:
+    """Get bounded context, active plans, and the tasks this session's tier may claim.
+
+    Pass your current model id (for example claude-sonnet-5) so the hub can record the
+    session's tier; call again if the model changes.
+    """
+    return hub().brief(Path(cwd), model=model, actor=ACTOR, session=SESSION)
 
 
 @mcp.tool()

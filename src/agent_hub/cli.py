@@ -13,6 +13,8 @@ from typing import Any
 from .adapters import install_adapters
 from .git import is_managed_clone, run_git
 from .hub import Hub, read_frontmatter
+from .policy import PolicyError, policy_path
+from .sessions import resolve_model
 from .setup import setup
 from .state import load_plan
 
@@ -46,6 +48,13 @@ def build_parser() -> argparse.ArgumentParser:
     session_parser.add_argument("--value", action="store_true")
     brief = commands.add_parser("brief")
     brief.add_argument("--cwd", default=".")
+    brief.add_argument("--model", help="Model id of this session, e.g. claude-sonnet-5")
+
+    policy_parser = commands.add_parser("policy")
+    policy_commands = policy_parser.add_subparsers(dest="policy_command", required=True)
+    policy_commands.add_parser("show")
+    policy_commands.add_parser("validate")
+
     search = commands.add_parser("search")
     search.add_argument("query")
 
@@ -116,6 +125,7 @@ def build_parser() -> argparse.ArgumentParser:
     task_commands = task.add_subparsers(dest="task_command", required=True)
     ready = task_commands.add_parser("ready")
     ready.add_argument("--plan")
+    ready.add_argument("--tier")
     for name in ("claim", "release"):
         command = task_commands.add_parser(name)
         command.add_argument("plan_id")
@@ -124,6 +134,7 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("--session")
         if name == "claim":
             command.add_argument("--cwd", default=".")
+            command.add_argument("--allow-tier-mismatch", action="store_true")
     checkpoint = task_commands.add_parser("checkpoint")
     checkpoint.add_argument("plan_id")
     checkpoint.add_argument("task_id")
@@ -195,7 +206,14 @@ def dispatch(args: argparse.Namespace) -> Any:
     if args.command == "scan":
         return hub.scan()
     if args.command == "brief":
-        return hub.brief(Path(args.cwd))
+        return hub.brief(
+            Path(args.cwd),
+            model=args.model,
+            actor=os.environ.get("AGENT_HUB_ACTOR", "agent"),
+            session=os.environ.get("AGENT_HUB_SESSION") or None,
+        )
+    if args.command == "policy":
+        return policy_report(hub, validate_only=args.policy_command == "validate")
     if args.command == "search":
         return hub.search(args.query)
     if args.command == "migrate-remember":
@@ -240,10 +258,29 @@ def dispatch(args: argparse.Namespace) -> Any:
         return load_plan(hub.root, args.plan_id, args.revision)
     if args.command == "task":
         if args.task_command == "ready":
-            return hub.ready_tasks(args.plan)
+            tasks = hub.ready_tasks(args.plan)
+            if args.tier:
+                policy = hub.policy()
+                tasks = [
+                    task
+                    for task in tasks
+                    if (policy.task_tier(task) if policy else task.get("tier")) == args.tier
+                ]
+            return tasks
         actor, session = actor_session(args)
         if args.task_command == "claim":
-            return hub.claim_task(args.plan_id, args.task_id, actor, session, Path(args.cwd))
+            if args.allow_tier_mismatch:
+                if os.environ.get("AGENT_HUB_AGENT_SESSION"):
+                    raise ValueError("Tier override is unavailable inside a managed agent session")
+                require_human_confirmation(args.task_id, False, "override tier for", noun="task")
+            return hub.claim_task(
+                args.plan_id,
+                args.task_id,
+                actor,
+                session,
+                Path(args.cwd),
+                allow_tier_mismatch=args.allow_tier_mismatch,
+            )
         if args.task_command == "checkpoint":
             return hub.checkpoint_task(
                 args.plan_id, args.task_id, actor, session, args.summary, args.evidence
@@ -273,24 +310,60 @@ def dispatch(args: argparse.Namespace) -> Any:
 def doctor(hub: Hub) -> dict[str, Any]:
     checks: dict[str, Any] = {"root": str(hub.root), "managed_clone": is_managed_clone(hub.root)}
     checks["git"] = run_git(hub.root, "status", "--porcelain").stdout.strip() == ""
-    checks["scan"] = hub.scan()["errors"] == 0
+    try:
+        checks["policy"] = "ok" if hub.policy() else "absent"
+    except PolicyError as exc:
+        checks["policy"] = f"invalid: {exc}"
+    try:
+        checks["scan"] = hub.scan()["errors"] == 0
+    except ValueError:
+        checks["scan"] = False
     checks["queued_checkpoints"] = len(list(hub._outbox_root().glob("*.json")))
     checks["codex_instructions"] = Path("~/.codex/AGENTS.md").expanduser().exists()
     checks["claude_instructions"] = Path("~/.claude/CLAUDE.md").expanduser().exists()
+    informational = {"root", "queued_checkpoints", "policy"}
     checks["ok"] = all(
-        value for key, value in checks.items() if key not in {"root", "queued_checkpoints"}
-    )
+        value for key, value in checks.items() if key not in informational
+    ) and not str(checks["policy"]).startswith("invalid")
     return checks
 
 
-def require_human_confirmation(identifier: str, yes: bool, action: str) -> None:
+def require_human_confirmation(identifier: str, yes: bool, action: str, noun: str = "plan") -> None:
     if yes:
         return
     if not sys.stdin.isatty():
-        raise ValueError(f"Plan {action} requires an interactive terminal or --yes")
-    answer = input(f"{action.title()} plan {identifier}? Type its id: ")
+        raise ValueError(f"{noun.title()} {action} requires an interactive terminal or --yes")
+    answer = input(f"{action.title()} {noun} {identifier}? Type its id: ")
     if answer != identifier:
-        raise ValueError(f"Plan {action} cancelled")
+        raise ValueError(f"{noun.title()} {action} cancelled")
+
+
+def policy_report(hub: Hub, validate_only: bool) -> dict[str, Any]:
+    path = policy_path(hub.root)
+    report: dict[str, Any] = {"path": str(path), "present": path.exists()}
+    if not path.exists():
+        report["valid"] = None
+        return report
+    try:
+        policy = hub.policy()
+    except PolicyError as exc:
+        if validate_only:
+            raise ValueError(str(exc)) from exc
+        report.update({"valid": False, "error": str(exc)})
+        return report
+    report["valid"] = True
+    if validate_only or policy is None:
+        return report
+    report["default_task_tier"] = policy.default_task_tier
+    report["tiers"] = {name: list(patterns) for name, patterns in policy.tiers.items()}
+    session = os.environ.get("AGENT_HUB_SESSION") or None
+    model = resolve_model(session)
+    report["session"] = {
+        "session": session,
+        "model": model,
+        "tier": policy.tier_for_model(model) if model else None,
+    }
+    return report
 
 
 def run_agent(

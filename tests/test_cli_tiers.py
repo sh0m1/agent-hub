@@ -64,6 +64,13 @@ def test_task_ready_tier_filter(policy_hub: Path, tmp_path: Path) -> None:
     assert [t["id"] for t in _run(policy_hub, "task", "ready")] == ["exec", "review"]
     assert [t["id"] for t in _run(policy_hub, "task", "ready", "--tier", "frontier")] == ["review"]
     assert [t["id"] for t in _run(policy_hub, "task", "ready", "--tier", "standard")] == ["exec"]
+    with pytest.raises(ValueError, match="Unknown tier: cheap"):
+        _run(policy_hub, "task", "ready", "--tier", "cheap")
+
+
+def test_task_ready_tier_requires_policy(hub_repo: Path) -> None:
+    with pytest.raises(ValueError, match="task ready --tier requires memory/policy/tiers.yaml"):
+        _run(hub_repo, "task", "ready", "--tier", "standard")
 
 
 def test_override_requires_tty_and_confirmation(

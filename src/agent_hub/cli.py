@@ -262,11 +262,11 @@ def dispatch(args: argparse.Namespace) -> Any:
             tasks = hub.ready_tasks(args.plan)
             if args.tier:
                 policy = hub.policy()
-                tasks = [
-                    task
-                    for task in tasks
-                    if (policy.task_tier(task) if policy else task.get("tier")) == args.tier
-                ]
+                if policy is None:
+                    raise ValueError("task ready --tier requires memory/policy/tiers.yaml")
+                if args.tier not in policy.tiers:
+                    raise ValueError(f"Unknown tier: {args.tier}")
+                tasks = [task for task in tasks if policy.task_tier(task) == args.tier]
             return tasks
         actor, session = actor_session(args)
         if args.task_command == "claim":

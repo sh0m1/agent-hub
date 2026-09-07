@@ -57,3 +57,57 @@ def test_remote_push_serializes_competing_claims(
     first.sync()
     owner = load_state(hub_repo).plans["shared-plan"].tasks["first"].owner
     assert owner in {"codex", "claude"}
+
+
+def test_only_matching_tier_can_win_a_race(
+    policy_hub: Path, plan_file: Path, tmp_path: Path, monkeypatch
+) -> None:
+    from agent_hub.sessions import record_session
+
+    first = Hub(policy_hub)
+    first.draft_plan(plan_file, "codex", "draft")
+    first.approve_plan("shared-plan")
+    record_session("one", "codex", "claude-sonnet-5", "standard")
+    record_session("two", "claude", "claude-opus-5", "frontier")
+
+    remote = git(policy_hub, "remote", "get-url", "origin")
+    second_path = tmp_path / "machine-two" / "runtime"
+    second_path.parent.mkdir()
+    subprocess.run(
+        ["git", "clone", "-b", "main", remote, str(second_path)],
+        check=True,
+        capture_output=True,
+    )
+    git(second_path, "config", "user.email", "test@example.com")
+    git(second_path, "config", "user.name", "Agent Hub Test")
+    (second_path / ".agent-hub-managed").touch()
+    second = Hub(second_path)
+    first_worktree = project(tmp_path / "work-one")
+    second_worktree = project(tmp_path / "work-two")
+
+    barrier = threading.Barrier(2)
+    outcomes: dict[str, str] = {}
+
+    def claim(hub: Hub, actor: str, session: str, worktree: str) -> None:
+        barrier.wait()
+        try:
+            hub.claim_task("shared-plan", "first", actor, session, Path(worktree))
+            outcomes[actor] = "won"
+        except Exception as exc:
+            outcomes[actor] = str(exc)
+
+    monkeypatch.delenv("AGENT_HUB_LOCK_DIR")
+    threads = [
+        threading.Thread(target=claim, args=(first, "codex", "one", str(first_worktree))),
+        threading.Thread(target=claim, args=(second, "claude", "two", str(second_worktree))),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert outcomes["codex"] == "won"
+    assert "requires tier standard" in outcomes["claude"]
+    first.sync()
+    task = load_state(policy_hub).plans["shared-plan"].tasks["first"]
+    assert (task.owner, task.tier) == ("codex", "standard")

@@ -3,11 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from conftest import project
 
 from agent_hub.hub import Hub
 from agent_hub.policy import DEFAULT_POLICY_TEXT, PolicyError, parse_policy, policy_path
-from agent_hub.sessions import load_record
-from agent_hub.state import State, validate_plan
+from agent_hub.sessions import load_record, record_session
+from agent_hub.state import State, load_state, validate_plan
 
 
 def _claim_event(payload: dict) -> dict:
@@ -198,3 +199,85 @@ def test_env_model_overrides_argument(policy_hub: Path, tmp_path: Path, monkeypa
     _activate_tiered(hub, tmp_path)
     brief = hub.brief(Path("/tmp"), model="claude-sonnet-5", actor="codex", session="one")
     assert "claude-opus-5 · tier=frontier" in brief
+
+
+def test_matching_tier_claims_and_stamps_event(policy_hub: Path, tmp_path: Path) -> None:
+    hub = Hub(policy_hub)
+    _activate_tiered(hub, tmp_path)
+    worktree = project(tmp_path / "work")
+    record_session("one", "codex", "claude-sonnet-5", "standard")
+    event = hub.claim_task("tiered", "exec", "codex", "one", worktree)
+    assert event["payload"]["model"] == "claude-sonnet-5"
+    assert event["payload"]["tier"] == "standard"
+    assert event["payload"]["tier_override"] is False
+    task = load_state(policy_hub).plans["tiered"].tasks["exec"]
+    assert (task.model, task.tier) == ("claude-sonnet-5", "standard")
+
+
+def test_mismatched_tier_is_rejected_both_ways(policy_hub: Path, tmp_path: Path) -> None:
+    hub = Hub(policy_hub)
+    _activate_tiered(hub, tmp_path)
+    worktree = project(tmp_path / "work")
+    record_session("frontier-session", "claude", "claude-opus-5", "frontier")
+    record_session("standard-session", "codex", "claude-sonnet-5", "standard")
+    with pytest.raises(
+        ValueError,
+        match="Task exec requires tier standard; session model claude-opus-5 is tier frontier",
+    ):
+        hub.claim_task("tiered", "exec", "claude", "frontier-session", worktree)
+    with pytest.raises(
+        ValueError,
+        match="Task review requires tier frontier; session model claude-sonnet-5 is tier standard",
+    ):
+        hub.claim_task("tiered", "review", "codex", "standard-session", worktree)
+
+
+def test_undeclared_and_unmapped_sessions_are_rejected(policy_hub: Path, tmp_path: Path) -> None:
+    hub = Hub(policy_hub)
+    _activate_tiered(hub, tmp_path)
+    worktree = project(tmp_path / "work")
+    with pytest.raises(ValueError, match="Session has not declared a model; call brief"):
+        hub.claim_task("tiered", "exec", "codex", "nobody", worktree)
+    record_session("odd", "codex", "mystery-9", "unknown")
+    with pytest.raises(
+        ValueError, match="Model 'mystery-9' is not mapped to a tier in memory/policy/tiers.yaml"
+    ):
+        hub.claim_task("tiered", "exec", "codex", "odd", worktree)
+
+
+def test_override_bypasses_comparison_and_is_stamped(policy_hub: Path, tmp_path: Path) -> None:
+    hub = Hub(policy_hub)
+    _activate_tiered(hub, tmp_path)
+    worktree = project(tmp_path / "work")
+    record_session("one", "claude", "claude-opus-5", "frontier")
+    event = hub.claim_task("tiered", "exec", "claude", "one", worktree, allow_tier_mismatch=True)
+    assert event["payload"]["tier_override"] is True
+    assert event["payload"]["tier"] == "frontier"
+    with pytest.raises(ValueError, match="not declared"):
+        hub.claim_task("tiered", "review", "claude", "nobody", worktree, allow_tier_mismatch=True)
+
+
+def test_invalid_policy_rejects_every_claim(policy_hub: Path, tmp_path: Path) -> None:
+    hub = Hub(policy_hub)
+    _activate_tiered(hub, tmp_path)
+    worktree = project(tmp_path / "work")
+    record_session("one", "codex", "claude-sonnet-5", "standard")
+    policy_path(policy_hub).write_text("schema_version: 1\n", encoding="utf-8")
+    with pytest.raises(PolicyError):
+        hub.claim_task("tiered", "exec", "codex", "one", worktree)
+
+
+def test_without_policy_claims_record_model_and_null_tier(
+    hub_repo: Path, tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("AGENT_HUB_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.delenv("AGENT_HUB_MODEL", raising=False)
+    hub = Hub(hub_repo)
+    _activate_tiered(hub, tmp_path)
+    worktree = project(tmp_path / "work")
+    record_session("one", "codex", "claude-sonnet-5", None)
+    event = hub.claim_task("tiered", "exec", "codex", "one", worktree)
+    assert event["payload"]["model"] == "claude-sonnet-5"
+    assert event["payload"]["tier"] is None
+    undeclared = hub.claim_task("tiered", "review", "codex", "two", worktree)
+    assert undeclared["payload"]["model"] is None

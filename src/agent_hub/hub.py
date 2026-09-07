@@ -304,8 +304,10 @@ class Hub:
         actor: str,
         session: str,
         cwd: Path,
+        allow_tier_mismatch: bool = False,
     ) -> dict[str, Any]:
         plan_id = slug(plan_id)
+        self.policy()  # fail fast on an invalid policy before touching git
 
         def operation(state: State) -> tuple[dict[str, Any], str]:
             plan_state, plan, task = self._active_task(state, plan_id, task_id)
@@ -316,6 +318,9 @@ class Hub:
                 dependency_state = plan_state.tasks.get(dependency)
                 if not dependency_state or dependency_state.status != "completed":
                     raise ValueError(f"Dependency is not complete: {dependency}")
+            model, tier, override_used = self._check_tier(
+                task, task_id, session, allow_tier_mismatch
+            )
             project = task.get("project")
             read_only = bool(task.get("read_only"))
             if read_only:
@@ -350,12 +355,43 @@ class Hub:
                 {
                     "plan_id": plan_id,
                     "task_id": task_id,
-                    "payload": {"lease_until": lease, "worktree": worktree},
+                    "payload": {
+                        "lease_until": lease,
+                        "worktree": worktree,
+                        "model": model,
+                        "tier": tier,
+                        "tier_override": override_used,
+                    },
                 }
             )
             return event, f"hub: claim {plan_id}/{task_id} for {actor}"
 
         return self._mutate(operation)
+
+    def _check_tier(
+        self,
+        task: dict[str, Any],
+        task_id: str,
+        session: str,
+        allow_tier_mismatch: bool,
+    ) -> tuple[str | None, str | None, bool]:
+        policy = self.policy()
+        model = resolve_model(session)
+        if policy is None:
+            return model, None, False
+        if not model:
+            raise ValueError("Session has not declared a model; call brief with model=<id> first")
+        tier = policy.tier_for_model(model)
+        if tier == UNKNOWN_TIER:
+            raise ValueError(f"Model '{model}' is not mapped to a tier in memory/policy/tiers.yaml")
+        required = policy.task_tier(task)
+        if tier == required:
+            return model, tier, False
+        if not allow_tier_mismatch:
+            raise ValueError(
+                f"Task {task_id} requires tier {required}; session model {model} is tier {tier}"
+            )
+        return model, tier, True
 
     def checkpoint_task(
         self,

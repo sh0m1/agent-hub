@@ -1,6 +1,6 @@
 [project]
 name = "agent-hub"
-version = "0.3.0"
+version = "0.4.0"
 description = "Git-native shared knowledge and planning for local coding agents"
 readme = "README.md"
 license = "MIT"

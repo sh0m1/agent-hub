@@ -1,13 +1,13 @@
 #!/bin/sh
 # Agent Hub bootstrap: installs uv if needed, installs agent-hub, runs setup.
 #
-#   curl -fsSL https://raw.githubusercontent.com/sh0m1/agent-hub/main/install.sh \
-#     | sh -s -- --remote https://github.com/you/agent-hub-memory.git
+#   curl -fsSL https://raw.githubusercontent.com/sh0m1/agent-hub/main/install.sh | sh
 #
-# Re-running is safe: setup is idempotent and remembers the remote.
+# Add `-s -- --remote <git-url>` to sync the memory across machines. Re-running is safe:
+# setup is idempotent and remembers the remote.
 set -eu
 
-DEFAULT_REF="v0.3.0"
+DEFAULT_REF="v0.4.0"
 REPO_URL="https://github.com/sh0m1/agent-hub"
 
 REMOTE=""
@@ -19,8 +19,8 @@ usage() {
     cat <<EOF
 Usage: install.sh [--remote <git-url>] [--ref <tag>] [--keep-claude-memory] [--dry-run]
 
-  --remote <git-url>     Git remote of your Agent Hub memory repository. Optional when a
-                         previous setup on this machine already recorded one.
+  --remote <git-url>     Git remote to sync the memory repository with. Without it (and with
+                         none remembered from an earlier run) the hub is local to this machine.
   --ref <tag>            agent-hub version to install (default: $DEFAULT_REF).
   --keep-claude-memory   Leave Claude Code's automatic memory enabled.
   --dry-run              Print the commands that would run; touch neither network nor disk.

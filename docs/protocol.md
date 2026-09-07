@@ -24,9 +24,13 @@ Heartbeats and checkpoints renew the lease. An expired task may be reclaimed; up
 owner are rejected. Empty `write_scope` means the entire project, so concurrent writing requires
 explicit non-overlapping scopes and separate Git worktrees.
 
-Every authoritative transition must be pushed to the remote before it succeeds. A rejected push
-causes the managed clone to synchronize, replay state, revalidate the operation, and retry. This
-makes the remote branch update the compare-and-swap boundary for competing claims.
+Every authoritative transition is committed under a repository lock, so agents on one machine
+are serialized by the lock alone and a hub needs no remote. When the runtime clone has an
+`origin`, each transition must also be pushed before it succeeds: a rejected push causes the
+managed clone to synchronize, replay state, revalidate the operation, and retry, which makes the
+remote branch update the compare-and-swap boundary for competing claims across machines. A local
+hub becomes shared by running `agent-hub setup --remote <url>`, which attaches the remote and
+pushes the existing history.
 
 ## Generic agent contract
 

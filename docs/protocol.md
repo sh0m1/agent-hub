@@ -41,6 +41,44 @@ makes the remote branch update the compare-and-swap boundary for competing claim
 
 Clients with MCP use the equivalent `hub_*` tools. Plan approval is intentionally CLI-only.
 
+## Execution tiers
+
+`memory/policy/tiers.yaml` maps model ids to user-named tiers:
+
+```yaml
+schema_version: 1
+default_task_tier: standard
+tiers:
+  frontier:
+    models: ["claude-opus-*", "claude-fable-*", "gpt-5.6-pro*"]
+  standard:
+    models: ["claude-sonnet-*", "gpt-5.6-terra*", "gemini-*-flash*"]
+```
+
+Patterns are case-insensitive globs. A model matching no tier is `unknown` and cannot claim. A
+model matching two tiers is a validation error. `setup` writes the default file; edit it in any
+editor and commit — `scan`, `doctor`, and `agent-hub policy validate` check it.
+
+Tasks take an optional `tier`; a missing value means `default_task_tier`. A `tier` not defined in
+the policy is rejected at draft time.
+
+Sessions declare their model by passing it to `brief` / `hub_get_brief`. The resolution order is
+the `AGENT_HUB_MODEL` environment variable, then the `model` argument, then the record saved by
+an earlier brief for the same session id. Records live in the local state directory and are
+never committed. A declared brief lists only tasks of the session's tier and reports how many
+tasks of other tiers were hidden.
+
+A claim is rejected when the session is undeclared, when its model is unmapped, or when its tier
+differs from the task's tier. The claim event records `model`, `tier`, and `tier_override`.
+Heartbeats, checkpoints, and completion do not re-check the tier; the guard is at pickup.
+
+`agent-hub task claim … --allow-tier-mismatch` bypasses the comparison. It is refused in managed
+agent sessions and non-interactive terminals, requires typing the task id, and is not available
+through MCP.
+
+When `tiers.yaml` is absent, tier checks are skipped and `doctor` reports `policy: absent`. When
+it is invalid, `scan` and `doctor` fail and every claim is rejected.
+
 ## Plan schema
 
 ```yaml
@@ -56,6 +94,7 @@ tasks:
   - id: core
     title: Implement the state store
     project: you-agent-hub-memory
+    tier: standard
     depends_on: []
     write_scope: ["src/agent_hub/**", "tests/**"]
     acceptance:

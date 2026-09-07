@@ -16,3 +16,9 @@ def test_managed_instruction_block_is_idempotent_and_preserves_existing(tmp_path
 
 def test_managed_instructions_require_a_stable_cli_session() -> None:
     assert "stable session ID" in INSTRUCTIONS
+
+
+def test_managed_instructions_require_a_model_declaration() -> None:
+    assert "model id" in INSTRUCTIONS
+    assert "hub_get_brief" in INSTRUCTIONS
+    assert "matching your tier" in INSTRUCTIONS

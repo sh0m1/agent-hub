@@ -31,8 +31,8 @@ curl -fsSL https://raw.githubusercontent.com/sh0m1/agent-hub/main/install.sh \
 To go back to a machine-local memory, `agent-hub setup --local` detaches and forgets the remote
 (your local history is kept). Other flags: `--ref <tag>` to pick a version, `--keep-claude-memory`
 to leave Claude Code's automatic memory on, `--dry-run` to print the commands without touching
-anything. Manual equivalent: `uv tool install git+https://github.com/sh0m1/agent-hub@v0.5.0` then
-`agent-hub setup [--remote <url> | --local]`.
+anything. Manual equivalent: `uv tool install git+https://github.com/sh0m1/agent-hub@v0.6.0` then
+`agent-hub setup [--remote <url> | --local] [--profile NAME]`.
 
 `setup` adds bounded managed blocks to the Codex and Claude user instruction files and registers
 the MCP server with whichever of `codex` and `claude` are on `PATH` (others are reported as
@@ -51,6 +51,33 @@ agent-hub adapter install /path/to/project --tools agents,claude,gemini,cursor,c
 ```
 
 Only a marked managed block is added or replaced; existing project instructions are preserved.
+
+## Team hub and private sessions
+
+A machine can hold several hubs, called profiles. A typical pair is a `team` hub shared through
+a remote and a `private` hub that never leaves the machine:
+
+```sh
+agent-hub setup --profile team --remote git@github.com:you/team-memory.git --default
+agent-hub setup --profile private --local
+```
+
+Sessions use the default profile unless the terminal says otherwise:
+
+```sh
+AGENT_HUB_PROFILE=private claude     # this session reads and writes only the private hub
+claude                               # this one uses the team hub
+```
+
+The variable reaches the MCP server that Claude Code or Codex starts, so it applies to agent
+sessions, not only to shell commands. The brief's header always names the hub
+(`Hub: private · local only`). An unknown profile is an error rather than a fallback to the
+default, and if `AGENT_HUB_REPO` is also set the brief warns that it overrides the profile.
+`agent-hub profile list` shows the profiles, the default, and the one the current terminal
+resolves to; `agent-hub profile default NAME` changes the default.
+
+Upgrading from an earlier version: re-run `agent-hub setup` once so the MCP registration stops
+pinning a hub path; `agent-hub doctor` reports `mcp_pinned` until you do.
 
 ## Everyday workflow
 

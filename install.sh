@@ -7,22 +7,25 @@
 # setup is idempotent and remembers the remote.
 set -eu
 
-DEFAULT_REF="v0.5.0"
+DEFAULT_REF="v0.6.0"
 REPO_URL="https://github.com/sh0m1/agent-hub"
 
 REMOTE=""
 LOCAL=0
+PROFILE=""
 REF="$DEFAULT_REF"
 DRY_RUN=0
 KEEP_CLAUDE_MEMORY=0
 
 usage() {
     cat <<EOF
-Usage: install.sh [--remote <git-url> | --local] [--ref <tag>] [--keep-claude-memory] [--dry-run]
+Usage: install.sh [--remote <git-url> | --local] [--profile <name>] [--ref <tag>]
+                  [--keep-claude-memory] [--dry-run]
 
   --remote <git-url>     Git remote to sync the memory repository with. Without it (and with
                          none remembered from an earlier run) the hub is local to this machine.
   --local                Keep the memory on this machine only; detaches and forgets any remote.
+  --profile <name>       Hub profile to create or refresh (e.g. team, private).
   --ref <tag>            agent-hub version to install (default: $DEFAULT_REF).
   --keep-claude-memory   Leave Claude Code's automatic memory enabled.
   --dry-run              Print the commands that would run; touch neither network nor disk.
@@ -34,6 +37,8 @@ while [ $# -gt 0 ]; do
         --remote) REMOTE="$2"; shift 2 ;;
         --remote=*) REMOTE="${1#--remote=}"; shift ;;
         --local) LOCAL=1; shift ;;
+        --profile) PROFILE="$2"; shift 2 ;;
+        --profile=*) PROFILE="${1#--profile=}"; shift ;;
         --ref) REF="$2"; shift 2 ;;
         --ref=*) REF="${1#--ref=}"; shift ;;
         --keep-claude-memory) KEEP_CLAUDE_MEMORY=1; shift ;;
@@ -94,6 +99,9 @@ if [ -n "$REMOTE" ]; then
 fi
 if [ "$LOCAL" = 1 ]; then
     set -- "$@" --local
+fi
+if [ -n "$PROFILE" ]; then
+    set -- "$@" --profile "$PROFILE"
 fi
 if [ "$KEEP_CLAUDE_MEMORY" = 1 ]; then
     set -- "$@" --keep-claude-memory

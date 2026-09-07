@@ -32,6 +32,18 @@ remote branch update the compare-and-swap boundary for competing claims across m
 hub becomes shared by running `agent-hub setup --remote <url>`, which attaches the remote and
 pushes the existing history; `agent-hub setup --local` detaches and forgets the remote again.
 
+## Hub profiles
+
+`~/.config/agent-hub/config.json` names one or more hubs (profiles), each a runtime repository
+with or without a remote, and a default. A process picks its hub in this order: an explicit path
+(`--repo` or `AGENT_HUB_REPO`), then `AGENT_HUB_PROFILE`, then the default profile, then the
+historical path `~/.local/share/agent-hub/repo`. An `AGENT_HUB_PROFILE` that names no configured
+profile is an error — a session that believes it is private must never fall back to a shared hub.
+When an explicit path overrides a profile, the brief says so. `setup` registers the MCP server
+without pinning a hub, and for Codex forwards the `AGENT_HUB_*` variables through `env_vars`, so
+the launching terminal's choice reaches agent sessions. Profiles are fully separate: a session
+reads and writes only its own hub.
+
 ## Generic agent contract
 
 1. Call `agent-hub brief --cwd "$PWD" --json` at session start. Keep the same

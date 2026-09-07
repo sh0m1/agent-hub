@@ -1,6 +1,14 @@
+from __future__ import annotations
+
+import json
 from pathlib import Path
 
-from agent_hub.setup import INSTRUCTIONS, merge_managed_block
+import pytest
+from conftest import which_for
+
+from agent_hub.health import doctor
+from agent_hub.hub import Hub
+from agent_hub.setup import INSTRUCTIONS, config_path, merge_managed_block, setup
 
 
 def test_managed_instruction_block_is_idempotent_and_preserves_existing(tmp_path: Path) -> None:
@@ -22,3 +30,163 @@ def test_managed_instructions_require_a_model_declaration() -> None:
     assert "model id" in INSTRUCTIONS
     assert "hub_get_brief" in INSTRUCTIONS
     assert "matching your tier" in INSTRUCTIONS
+
+
+# --- end-to-end setup() against a fake home -------------------------------------------------
+
+
+@pytest.fixture
+def bare_remote(hub_repo: Path, tmp_path: Path) -> str:
+    return str(tmp_path / "origin.git")
+
+
+def _setup(remote: str | None, runtime: Path, home: Path, which, runner, **kwargs):
+    return setup(remote, runtime, home=home, which=which, runner=runner, **kwargs)
+
+
+def test_setup_remembers_remote_on_second_run(
+    bare_remote: str, tmp_path: Path, fake_home: Path, recording_runner
+) -> None:
+    _, runner = recording_runner
+    runtime = tmp_path / "rt"
+    first = _setup(bare_remote, runtime, fake_home, which_for("agent-hub-mcp"), runner)
+    assert first["remote"] == bare_remote
+    config = config_path(fake_home)
+    saved = config.read_text(encoding="utf-8")
+    second = _setup(None, runtime, fake_home, which_for("agent-hub-mcp"), runner)
+    assert second["remote"] == bare_remote
+    assert config.read_text(encoding="utf-8") == saved
+    assert json.loads(saved) == {"repo": str(runtime.resolve()), "remote": bare_remote}
+
+
+def test_setup_without_remote_and_no_config_raises_with_guidance(
+    tmp_path: Path, fake_home: Path, recording_runner
+) -> None:
+    _, runner = recording_runner
+    with pytest.raises(RuntimeError, match="--remote"):
+        _setup(None, tmp_path / "rt", fake_home, which_for("agent-hub-mcp"), runner)
+
+
+def test_setup_requires_mcp_executable_with_path_hint(
+    bare_remote: str, tmp_path: Path, fake_home: Path, recording_runner
+) -> None:
+    _, runner = recording_runner
+    with pytest.raises(RuntimeError, match="agent-hub-mcp.*PATH"):
+        _setup(bare_remote, tmp_path / "rt", fake_home, which_for(), runner)
+
+
+def test_setup_skips_tools_not_on_path(
+    bare_remote: str, tmp_path: Path, fake_home: Path, recording_runner
+) -> None:
+    calls, runner = recording_runner
+    summary = _setup(bare_remote, tmp_path / "rt", fake_home, which_for("agent-hub-mcp"), runner)
+    assert summary["tools"] == {
+        "codex": "skipped-not-installed",
+        "claude": "skipped-not-installed",
+    }
+    assert not any("mcp" in argv for argv in calls)
+
+
+def test_setup_configures_tools_without_duplicating_entries(
+    bare_remote: str, tmp_path: Path, fake_home: Path, recording_runner
+) -> None:
+    calls, runner = recording_runner
+    which = which_for("agent-hub-mcp", "claude", "codex")
+    runtime = tmp_path / "rt"
+    summary = _setup(bare_remote, runtime, fake_home, which, runner)
+    assert summary["tools"] == {"codex": "configured", "claude": "configured"}
+    for tool in ("codex", "claude"):
+        mcp_calls = [argv for argv in calls if argv[0] == tool]
+        assert [argv[:3] for argv in mcp_calls] == [
+            [tool, "mcp", "remove"],
+            [tool, "mcp", "add"],
+        ]
+        add = mcp_calls[1]
+        assert f"AGENT_HUB_REPO={runtime.resolve()}" in add
+        assert add[-1] == "/fake/bin/agent-hub-mcp"
+    first_count = len(calls)
+    _setup(None, runtime, fake_home, which, runner)
+    assert len(calls) == first_count * 2
+
+
+def test_setup_summary_matches_doctor_and_scan(
+    bare_remote: str, tmp_path: Path, fake_home: Path, recording_runner
+) -> None:
+    _, runner = recording_runner
+    runtime = tmp_path / "rt"
+    summary = _setup(bare_remote, runtime, fake_home, which_for("agent-hub-mcp"), runner)
+    assert set(summary) == {
+        "ok",
+        "runtime",
+        "remote",
+        "config_path",
+        "tools",
+        "instructions",
+        "claude_memory_disabled",
+        "policy",
+        "doctor",
+        "scan",
+    }
+    assert summary["ok"] is True
+    assert summary["policy"] == "created"
+    assert summary["scan"]["errors"] == 0
+    assert summary["doctor"] == doctor(Hub(runtime), home=fake_home)
+    assert summary["doctor"]["codex_instructions"] is True
+    again = _setup(None, runtime, fake_home, which_for("agent-hub-mcp"), runner)
+    assert again["policy"] == "already-present"
+    assert again["instructions"] == {"codex_agents_md": "unchanged", "claude_md": "unchanged"}
+
+
+def test_setup_managed_blocks_are_idempotent_and_backed_up_once(
+    bare_remote: str, tmp_path: Path, fake_home: Path, recording_runner
+) -> None:
+    _, runner = recording_runner
+    agents = fake_home / ".codex" / "AGENTS.md"
+    agents.parent.mkdir(parents=True)
+    agents.write_text("# Mine\n", encoding="utf-8")
+    runtime = tmp_path / "rt"
+    first = _setup(bare_remote, runtime, fake_home, which_for("agent-hub-mcp"), runner)
+    assert first["instructions"] == {"codex_agents_md": "updated", "claude_md": "updated"}
+    after_first = {
+        path.name: path.read_bytes() for path in (agents, fake_home / ".claude" / "CLAUDE.md")
+    }
+    backups = sorted(agents.parent.glob("AGENTS.md.bak.*"))
+    assert len(backups) == 1
+    _setup(None, runtime, fake_home, which_for("agent-hub-mcp"), runner)
+    for path in (agents, fake_home / ".claude" / "CLAUDE.md"):
+        assert path.read_bytes() == after_first[path.name]
+    assert sorted(agents.parent.glob("AGENTS.md.bak.*")) == backups
+    assert "# Mine" in agents.read_text(encoding="utf-8")
+
+
+def test_setup_claude_memory_toggle(
+    bare_remote: str, tmp_path: Path, fake_home: Path, recording_runner
+) -> None:
+    _, runner = recording_runner
+    settings = fake_home / ".claude" / "settings.json"
+    settings.parent.mkdir(parents=True)
+    settings.write_text(json.dumps({"autoMemoryEnabled": True, "theme": "dark"}), encoding="utf-8")
+    runtime = tmp_path / "rt"
+    first = _setup(bare_remote, runtime, fake_home, which_for("agent-hub-mcp"), runner)
+    assert first["claude_memory_disabled"] is True
+    written = json.loads(settings.read_text(encoding="utf-8"))
+    assert written == {"autoMemoryEnabled": False, "theme": "dark"}
+    assert len(list(settings.parent.glob("settings.json.bak.*"))) == 1
+    second = _setup(None, runtime, fake_home, which_for("agent-hub-mcp"), runner)
+    assert second["claude_memory_disabled"] is False
+    assert len(list(settings.parent.glob("settings.json.bak.*"))) == 1
+
+    other_home = tmp_path / "home2"
+    other_settings = other_home / ".claude" / "settings.json"
+    other_settings.parent.mkdir(parents=True)
+    other_settings.write_text(json.dumps({"autoMemoryEnabled": True}), encoding="utf-8")
+    kept = _setup(
+        bare_remote,
+        tmp_path / "rt2",
+        other_home,
+        which_for("agent-hub-mcp"),
+        runner,
+        disable_claude_memory=False,
+    )
+    assert kept["claude_memory_disabled"] is False
+    assert json.loads(other_settings.read_text(encoding="utf-8")) == {"autoMemoryEnabled": True}

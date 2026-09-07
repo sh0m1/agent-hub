@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .adapters import install_adapters
-from .git import is_managed_clone, run_git
+from .health import doctor
 from .hub import Hub, read_frontmatter
 from .policy import PolicyError, policy_path
 from .sessions import record_session, resolve_model
@@ -64,7 +64,9 @@ def build_parser() -> argparse.ArgumentParser:
     migrate.add_argument("--actor", default="migration")
 
     setup_parser = commands.add_parser("setup")
-    setup_parser.add_argument("--remote", required=True)
+    setup_parser.add_argument(
+        "--remote", help="Memory repository URL; remembered after the first run"
+    )
     setup_parser.add_argument("--runtime", default="~/.local/share/agent-hub/repo")
     setup_parser.add_argument("--keep-claude-memory", action="store_true")
 
@@ -190,8 +192,8 @@ def main() -> None:
 
 def dispatch(args: argparse.Namespace) -> Any:
     if args.command == "setup":
-        setup(args.remote, Path(args.runtime), not args.keep_claude_memory)
-        return {"ok": True, "runtime": str(Path(args.runtime).expanduser())}
+        summary = setup(args.remote, Path(args.runtime), not args.keep_claude_memory)
+        return summary if args.json else format_setup_summary(summary)
     if args.command == "adapter":
         tools = [tool.strip() for tool in args.tools.split(",") if tool.strip()]
         return {"written": install_adapters(Path(args.path), tools)}
@@ -317,25 +319,33 @@ def dispatch(args: argparse.Namespace) -> Any:
     raise ValueError(f"Unsupported command: {args.command}")
 
 
-def doctor(hub: Hub) -> dict[str, Any]:
-    checks: dict[str, Any] = {"root": str(hub.root), "managed_clone": is_managed_clone(hub.root)}
-    checks["git"] = run_git(hub.root, "status", "--porcelain").stdout.strip() == ""
-    try:
-        checks["policy"] = "ok" if hub.policy() else "absent"
-    except PolicyError as exc:
-        checks["policy"] = f"invalid: {exc}"
-    try:
-        checks["scan"] = hub.scan()["errors"] == 0
-    except ValueError:
-        checks["scan"] = False
-    checks["queued_checkpoints"] = len(list(hub._outbox_root().glob("*.json")))
-    checks["codex_instructions"] = Path("~/.codex/AGENTS.md").expanduser().exists()
-    checks["claude_instructions"] = Path("~/.claude/CLAUDE.md").expanduser().exists()
-    informational = {"root", "queued_checkpoints", "policy"}
-    checks["ok"] = all(
-        value for key, value in checks.items() if key not in informational
-    ) and not str(checks["policy"]).startswith("invalid")
-    return checks
+def format_setup_summary(summary: dict[str, Any]) -> str:
+    tool_words = {"configured": "configured", "skipped-not-installed": "not installed, skipped"}
+    report = summary["doctor"]
+    failing = sorted(
+        key
+        for key, value in report.items()
+        if key not in {"root", "queued_checkpoints", "policy", "ok"} and not value
+    )
+    if str(report["policy"]).startswith("invalid"):
+        failing.append("policy")
+    lines = [
+        "Agent Hub setup " + ("complete" if summary["ok"] else "finished with problems"),
+        f"  runtime:  {summary['runtime']}",
+        f"  remote:   {summary['remote']}",
+        f"  codex:    {tool_words[summary['tools']['codex']]}",
+        f"  claude:   {tool_words[summary['tools']['claude']]}",
+        f"  policy:   {summary['policy'].replace('-', ' ')}",
+        f"  scan:     {summary['scan']['files']} files, {summary['scan']['errors']} errors",
+        "  doctor:   " + ("ok" if summary["ok"] else "NOT OK (" + ", ".join(failing) + ")"),
+    ]
+    skipped = [tool for tool, state in summary["tools"].items() if state != "configured"]
+    if skipped:
+        lines.append(
+            f"Next: install {', '.join(skipped)} and re-run `agent-hub setup` to register the "
+            "MCP server there."
+        )
+    return "\n".join(lines) + "\n"
 
 
 def require_human_confirmation(

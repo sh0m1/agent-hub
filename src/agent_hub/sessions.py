@@ -7,6 +7,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 MODEL_ENV = "AGENT_HUB_MODEL"
+HOME_ENV = "AGENT_HUB_HOME"
+
+
+def default_home() -> Path:
+    """The user's home for tool configuration; AGENT_HUB_HOME overrides it (tests, sandboxes)."""
+    configured = os.environ.get(HOME_ENV)
+    return Path(configured).expanduser() if configured else Path.home()
 
 
 @dataclass(frozen=True)

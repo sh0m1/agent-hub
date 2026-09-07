@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -85,6 +86,32 @@ def project_paths(tmp_path: Path) -> tuple[Path, Path, Path]:
         project(tmp_path / "project-two"),
         project(tmp_path / "project-three", "https://github.com/example/other.git"),
     )
+
+
+@pytest.fixture
+def fake_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("AGENT_HUB_HOME", str(home))
+    return home
+
+
+@pytest.fixture
+def recording_runner() -> tuple[list[list[str]], Callable[..., subprocess.CompletedProcess]]:
+    """Record every non-git command; let git run for real so clones happen."""
+    calls: list[list[str]] = []
+
+    def runner(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+        if argv and argv[0] == "git":
+            return subprocess.run(argv, **kwargs)  # type: ignore[arg-type]
+        calls.append(list(argv))
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    return calls, runner
+
+
+def which_for(*names: str) -> Callable[[str], str | None]:
+    return lambda name: f"/fake/bin/{name}" if name in names else None
 
 
 @pytest.fixture

@@ -14,7 +14,7 @@ from .adapters import install_adapters
 from .git import is_managed_clone, run_git
 from .hub import Hub, read_frontmatter
 from .policy import PolicyError, policy_path
-from .sessions import resolve_model
+from .sessions import record_session, resolve_model
 from .setup import setup
 from .state import load_plan
 
@@ -168,6 +168,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--plan")
     run.add_argument("--task")
     run.add_argument("--cwd", default=".")
+    run.add_argument("--model", help="Model id the launched tool runs, e.g. gpt-5.6-terra")
     run.add_argument("args", nargs=argparse.REMAINDER)
     return parser
 
@@ -303,6 +304,7 @@ def dispatch(args: argparse.Namespace) -> Any:
             args.plan,
             args.task,
             Path(args.cwd),
+            args.model,
         )
     raise ValueError(f"Unsupported command: {args.command}")
 
@@ -374,11 +376,21 @@ def run_agent(
     plan_id: str | None,
     task_id: str | None,
     cwd: Path,
+    model: str | None = None,
 ) -> dict[str, Any]:
     if bool(plan_id) != bool(task_id):
         raise ValueError("--plan and --task must be supplied together")
+    resolved = resolve_model(None, model)
+    policy = hub.policy()
+    if not resolved and policy and plan_id and task_id:
+        raise ValueError(
+            "agent-hub run needs --model <id> (or AGENT_HUB_MODEL) to claim a tiered task"
+        )
     hub.sync()
     session = str(uuid.uuid4())
+    if resolved:
+        tier = policy.tier_for_model(resolved) if policy else None
+        record_session(session, actor, resolved, tier)
     if plan_id and task_id:
         hub.claim_task(plan_id, task_id, actor, session, cwd)
     environment = os.environ.copy()
@@ -390,6 +402,8 @@ def run_agent(
             "AGENT_HUB_AGENT_SESSION": "1",
         }
     )
+    if resolved:
+        environment["AGENT_HUB_MODEL"] = resolved
     stopped = threading.Event()
 
     def heartbeat() -> None:

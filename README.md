@@ -49,7 +49,7 @@ tiers. See [docs/protocol.md](docs/protocol.md#execution-tiers).
 For supported tools, prefer the managed wrapper. Its options precede the tool name:
 
 ```sh
-agent-hub run --plan PLAN --task TASK --cwd /path/to/worktree codex
+agent-hub run --plan PLAN --task TASK --cwd /path/to/worktree --model gpt-5.6-terra codex
 ```
 
 The wrapper identifies the session, claims the task, synchronizes before launch, and renews the

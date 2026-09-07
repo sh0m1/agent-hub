@@ -8,6 +8,8 @@ from typing import Any
 
 import yaml
 
+from .policy import TierPolicy
+
 
 def utc_now() -> datetime:
     return datetime.now(UTC)
@@ -27,6 +29,9 @@ class TaskState:
     summary: str | None = None
     evidence: list[str] = field(default_factory=list)
     reason: str | None = None
+    model: str | None = None
+    tier: str | None = None
+    tier_override: bool = False
 
     def actively_claimed(self, now: datetime | None = None) -> bool:
         if self.status != "claimed" or not self.lease_until:
@@ -81,6 +86,10 @@ class State:
             task.session = event["session"]
             task.lease_until = payload["lease_until"]
             task.worktree = payload.get("worktree", task.worktree)
+            if kind == "task_claimed":
+                task.model = payload.get("model")
+                task.tier = payload.get("tier")
+                task.tier_override = bool(payload.get("tier_override", False))
             return
         if kind == "task_checkpoint":
             task.summary = payload.get("summary")
@@ -146,7 +155,7 @@ def load_plan(root: Path, plan_id: str, revision: int | None = None) -> dict[str
     return data
 
 
-def validate_plan(plan: dict[str, Any]) -> None:
+def validate_plan(plan: dict[str, Any], policy: TierPolicy | None = None) -> None:
     required = {"id", "title", "goal", "tasks"}
     missing = sorted(required - plan.keys())
     if missing:
@@ -163,6 +172,11 @@ def validate_plan(plan: dict[str, Any]) -> None:
         if task_id in task_ids:
             raise ValueError(f"Duplicate task id: {task_id}")
         task_ids.add(task_id)
+        tier = task.get("tier")
+        if tier is not None and not isinstance(tier, str):
+            raise ValueError(f"Task {task_id} tier must be a string")
+        if policy is not None and tier is not None and tier not in policy.tiers:
+            raise ValueError(f"Task {task_id} uses unknown tier: {tier}")
     for task in plan["tasks"]:
         unknown = set(task.get("depends_on", [])) - task_ids
         if unknown:

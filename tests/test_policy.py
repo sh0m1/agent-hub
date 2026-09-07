@@ -70,6 +70,11 @@ tiers:
             "schema_version: 1\ndefault_task_tier: 'Bad Name'\n"
             "tiers:\n  'Bad Name':\n    models: ['x']\n"
         ),
+        "tiers: [unclosed",
+        (
+            "schema_version: 1\ndefault_task_tier: '***'\n"
+            "tiers:\n  '***':\n    models: ['x']\n"
+        ),
     ],
 )
 def test_malformed_policies_are_rejected(text: str) -> None:

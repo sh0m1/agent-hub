@@ -51,7 +51,10 @@ def policy_path(root: Path) -> Path:
 
 
 def parse_policy(text: str) -> TierPolicy:
-    data = yaml.safe_load(text)
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        raise PolicyError(f"Invalid YAML syntax: {exc}") from exc
     if not isinstance(data, dict):
         raise PolicyError("tiers.yaml must be a YAML mapping")
     if data.get("schema_version") != 1:
@@ -62,7 +65,11 @@ def parse_policy(text: str) -> TierPolicy:
     tiers: dict[str, tuple[str, ...]] = {}
     for name, definition in raw_tiers.items():
         tier_name = str(name)
-        if slug(tier_name) != tier_name or tier_name == UNKNOWN_TIER:
+        try:
+            slugged = slug(tier_name)
+        except ValueError as exc:
+            raise PolicyError(f"Invalid tier name: {tier_name}") from exc
+        if slugged != tier_name or tier_name == UNKNOWN_TIER:
             raise PolicyError(f"Invalid tier name: {tier_name}")
         models = definition.get("models") if isinstance(definition, dict) else None
         valid = (

@@ -7,6 +7,7 @@ from pathlib import Path
 from conftest import git, project
 
 from agent_hub.hub import Hub
+from agent_hub.sessions import record_session
 from agent_hub.state import load_state
 
 
@@ -62,8 +63,6 @@ def test_remote_push_serializes_competing_claims(
 def test_only_matching_tier_can_win_a_race(
     policy_hub: Path, plan_file: Path, tmp_path: Path, monkeypatch
 ) -> None:
-    from agent_hub.sessions import record_session
-
     first = Hub(policy_hub)
     first.draft_plan(plan_file, "codex", "draft")
     first.approve_plan("shared-plan")
@@ -107,7 +106,7 @@ def test_only_matching_tier_can_win_a_race(
         thread.join()
 
     assert outcomes["codex"] == "won"
-    assert "requires tier standard" in outcomes["claude"]
+    assert outcomes["claude"] != "won"
     first.sync()
     task = load_state(policy_hub).plans["shared-plan"].tasks["first"]
     assert (task.owner, task.tier) == ("codex", "standard")

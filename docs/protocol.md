@@ -30,7 +30,7 @@ are serialized by the lock alone and a hub needs no remote. When the runtime clo
 managed clone to synchronize, replay state, revalidate the operation, and retry, which makes the
 remote branch update the compare-and-swap boundary for competing claims across machines. A local
 hub becomes shared by running `agent-hub setup --remote <url>`, which attaches the remote and
-pushes the existing history.
+pushes the existing history; `agent-hub setup --local` detaches and forgets the remote again.
 
 ## Generic agent contract
 

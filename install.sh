@@ -7,20 +7,22 @@
 # setup is idempotent and remembers the remote.
 set -eu
 
-DEFAULT_REF="v0.4.0"
+DEFAULT_REF="v0.5.0"
 REPO_URL="https://github.com/sh0m1/agent-hub"
 
 REMOTE=""
+LOCAL=0
 REF="$DEFAULT_REF"
 DRY_RUN=0
 KEEP_CLAUDE_MEMORY=0
 
 usage() {
     cat <<EOF
-Usage: install.sh [--remote <git-url>] [--ref <tag>] [--keep-claude-memory] [--dry-run]
+Usage: install.sh [--remote <git-url> | --local] [--ref <tag>] [--keep-claude-memory] [--dry-run]
 
   --remote <git-url>     Git remote to sync the memory repository with. Without it (and with
                          none remembered from an earlier run) the hub is local to this machine.
+  --local                Keep the memory on this machine only; detaches and forgets any remote.
   --ref <tag>            agent-hub version to install (default: $DEFAULT_REF).
   --keep-claude-memory   Leave Claude Code's automatic memory enabled.
   --dry-run              Print the commands that would run; touch neither network nor disk.
@@ -31,6 +33,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --remote) REMOTE="$2"; shift 2 ;;
         --remote=*) REMOTE="${1#--remote=}"; shift ;;
+        --local) LOCAL=1; shift ;;
         --ref) REF="$2"; shift 2 ;;
         --ref=*) REF="${1#--ref=}"; shift ;;
         --keep-claude-memory) KEEP_CLAUDE_MEMORY=1; shift ;;
@@ -42,6 +45,10 @@ done
 
 info() { printf '==> %s\n' "$*"; }
 fail() { printf 'install.sh: %s\n' "$*" >&2; exit 1; }
+
+if [ -n "$REMOTE" ] && [ "$LOCAL" = 1 ]; then
+    fail "--local and --remote cannot be combined"
+fi
 run() {
     if [ "$DRY_RUN" = 1 ]; then
         printf '[dry-run] %s\n' "$*"
@@ -81,12 +88,14 @@ fi
 
 # 3. setup
 info "Running agent-hub setup"
-if [ -n "$REMOTE" ] && [ "$KEEP_CLAUDE_MEMORY" = 1 ]; then
-    run agent-hub setup --remote "$REMOTE" --keep-claude-memory
-elif [ -n "$REMOTE" ]; then
-    run agent-hub setup --remote "$REMOTE"
-elif [ "$KEEP_CLAUDE_MEMORY" = 1 ]; then
-    run agent-hub setup --keep-claude-memory
-else
-    run agent-hub setup
+set --
+if [ -n "$REMOTE" ]; then
+    set -- "$@" --remote "$REMOTE"
 fi
+if [ "$LOCAL" = 1 ]; then
+    set -- "$@" --local
+fi
+if [ "$KEEP_CLAUDE_MEMORY" = 1 ]; then
+    set -- "$@" --keep-claude-memory
+fi
+run agent-hub setup "$@"

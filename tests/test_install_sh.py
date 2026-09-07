@@ -41,7 +41,7 @@ def test_install_sh_dry_run_prints_commands_and_touches_nothing(
     assert result.returncode == 0, result.stderr
     out = result.stdout
     assert "[dry-run] sh -c curl -fsSL https://astral.sh/uv/install.sh | sh" in out
-    assert "[dry-run] uv tool install --force git+https://github.com/sh0m1/agent-hub@v0.4.0" in out
+    assert "[dry-run] uv tool install --force git+https://github.com/sh0m1/agent-hub@v0.5.0" in out
     assert "[dry-run] agent-hub setup --remote https://example.invalid/m.git" in out
     assert not (tmp_path / "home").exists()
 
@@ -72,3 +72,19 @@ def test_install_sh_rejects_unknown_flag(empty_path: dict[str, str]) -> None:
     assert result.returncode == 1
     assert "unknown argument: --bogus" in result.stderr
     assert "Usage:" in result.stderr
+
+
+def test_install_sh_local_passthrough_and_conflict(empty_path: dict[str, str]) -> None:
+    result = subprocess.run(
+        ["sh", str(SCRIPT), "--local", "--dry-run"], env=empty_path, text=True, capture_output=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert "[dry-run] agent-hub setup --local" in result.stdout
+    conflict = subprocess.run(
+        ["sh", str(SCRIPT), "--local", "--remote", "https://x.invalid/r.git", "--dry-run"],
+        env=empty_path,
+        text=True,
+        capture_output=True,
+    )
+    assert conflict.returncode == 1
+    assert "--local and --remote" in conflict.stderr

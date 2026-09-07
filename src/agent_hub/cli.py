@@ -67,8 +67,12 @@ def build_parser() -> argparse.ArgumentParser:
     migrate.add_argument("--actor", default="migration")
 
     setup_parser = commands.add_parser("setup")
-    setup_parser.add_argument(
-        "--remote", help="Memory repository URL; remembered after the first run"
+    where = setup_parser.add_mutually_exclusive_group()
+    where.add_argument("--remote", help="Memory repository URL; remembered after the first run")
+    where.add_argument(
+        "--local",
+        action="store_true",
+        help="Keep the memory on this machine only; detaches and forgets any remote",
     )
     setup_parser.add_argument("--runtime", default="~/.local/share/agent-hub/repo")
     setup_parser.add_argument("--keep-claude-memory", action="store_true")
@@ -195,7 +199,9 @@ def main() -> None:
 
 def dispatch(args: argparse.Namespace) -> Any:
     if args.command == "setup":
-        summary = setup(args.remote, Path(args.runtime), not args.keep_claude_memory)
+        summary = setup(
+            args.remote, Path(args.runtime), not args.keep_claude_memory, local=args.local
+        )
         return summary if args.json else format_setup_summary(summary)
     if args.command == "adapter":
         tools = [tool.strip() for tool in args.tools.split(",") if tool.strip()]
@@ -322,6 +328,14 @@ def dispatch(args: argparse.Namespace) -> Any:
     raise ValueError(f"Unsupported command: {args.command}")
 
 
+def _remote_line(summary: dict[str, Any]) -> str:
+    if summary["remote"]:
+        return summary["remote"]
+    if summary.get("remote_removed"):
+        return f"local only (detached from {summary['remote_removed']})"
+    return "local only (share it later: agent-hub setup --remote <url>)"
+
+
 def format_setup_summary(summary: dict[str, Any]) -> str:
     tool_words = {"configured": "configured", "skipped-not-installed": "not installed, skipped"}
     report = summary["doctor"]
@@ -335,8 +349,7 @@ def format_setup_summary(summary: dict[str, Any]) -> str:
     lines = [
         "Agent Hub setup " + ("complete" if summary["ok"] else "finished with problems"),
         f"  runtime:  {summary['runtime']}",
-        "  remote:   "
-        + (summary["remote"] or "local only (share it later: agent-hub setup --remote <url>)"),
+        "  remote:   " + _remote_line(summary),
         f"  codex:    {tool_words[summary['tools']['codex']]}",
         f"  claude:   {tool_words[summary['tools']['claude']]}",
         f"  policy:   {summary['policy'].replace('-', ' ')}",

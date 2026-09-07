@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from .git import has_remote
+from .git import has_remote, remote_url
 from .health import doctor
 from .hub import Hub
 from .sessions import default_home
@@ -69,13 +69,16 @@ def setup(
     disable_claude_memory: bool = True,
     *,
     home: Path | None = None,
+    local: bool = False,
     which: Which = shutil.which,
     runner: Runner = subprocess.run,
 ) -> dict[str, Any]:
     """Install or refresh the local Agent Hub. Idempotent; returns a summary of what was done."""
+    if local and remote:
+        raise ValueError("--local and --remote cannot be combined")
     home = (home or default_home()).expanduser()
     runtime = runtime.expanduser().resolve()
-    remote = remote or load_config(home).get("remote")
+    remote = None if local else (remote or load_config(home).get("remote"))
     executable = which("agent-hub-mcp")
     if not executable:
         raise RuntimeError(
@@ -83,12 +86,16 @@ def setup(
             "there) and re-run"
         )
 
+    removed: str | None = None
     if not runtime.exists():
         runtime.parent.mkdir(parents=True, exist_ok=True)
         if remote:
             runner(["git", "clone", remote, str(runtime)], check=True)
         else:
             _init_local_repo(runtime, runner)
+    elif local and has_remote(runtime):
+        removed = remote_url(runtime)
+        runner(["git", "-C", str(runtime), "remote", "remove", "origin"], check=True)
     elif remote and not has_remote(runtime):
         runner(["git", "-C", str(runtime), "remote", "add", "origin", remote], check=True)
         runner(["git", "-C", str(runtime), "push", "-q", "-u", "origin", "main"], check=True)
@@ -147,6 +154,7 @@ def setup(
         "policy": policy,
         "doctor": report,
         "scan": hub.scan(),
+        "remote_removed": removed,
     }
 
 

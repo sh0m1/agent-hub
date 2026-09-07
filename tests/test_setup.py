@@ -80,6 +80,46 @@ def test_setup_without_remote_creates_a_local_hub(
     assert again["remote"] is None and again["policy"] == "already-present"
 
 
+def test_setup_local_detaches_remote_and_forgets_it(
+    bare_remote: str, tmp_path: Path, fake_home: Path, recording_runner
+) -> None:
+    _, runner = recording_runner
+    runtime = tmp_path / "rt"
+    _setup(bare_remote, runtime, fake_home, which_for("agent-hub-mcp"), runner)
+    assert git(runtime, "remote", "get-url", "origin") == bare_remote
+
+    summary = _setup(None, runtime, fake_home, which_for("agent-hub-mcp"), runner, local=True)
+    assert summary["remote"] is None
+    assert summary["remote_removed"] == bare_remote
+    assert summary["doctor"]["remote"] is None
+    assert git(runtime, "remote") == ""
+    assert json.loads(config_path(fake_home).read_text(encoding="utf-8"))["remote"] is None
+
+    # A plain re-run must stay local: the old remote is forgotten, not merely detached.
+    again = _setup(None, runtime, fake_home, which_for("agent-hub-mcp"), runner)
+    assert again["remote"] is None and again["remote_removed"] is None
+    assert git(runtime, "remote") == ""
+
+    # --local on an already-local hub is a no-op.
+    once_more = _setup(None, runtime, fake_home, which_for("agent-hub-mcp"), runner, local=True)
+    assert once_more["remote_removed"] is None and once_more["ok"] is True
+
+
+def test_setup_local_and_remote_are_mutually_exclusive(
+    tmp_path: Path, fake_home: Path, recording_runner
+) -> None:
+    _, runner = recording_runner
+    with pytest.raises(ValueError, match="--local.*--remote"):
+        _setup(
+            "https://example.invalid/m.git",
+            tmp_path / "rt",
+            fake_home,
+            which_for(),
+            runner,
+            local=True,
+        )
+
+
 def test_setup_attaches_a_remote_to_an_existing_local_hub(
     tmp_path: Path, fake_home: Path, recording_runner, monkeypatch
 ) -> None:
@@ -159,7 +199,9 @@ def test_setup_summary_matches_doctor_and_scan(
         "policy",
         "doctor",
         "scan",
+        "remote_removed",
     }
+    assert summary["remote_removed"] is None
     assert summary["ok"] is True
     assert summary["policy"] == "created"
     assert summary["scan"]["errors"] == 0

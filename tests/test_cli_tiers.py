@@ -156,3 +156,11 @@ def test_mcp_brief_accepts_model_and_claim_has_no_override() -> None:
 
     assert "model" in inspect.signature(mcp_server.hub_get_brief).parameters
     assert "allow_tier_mismatch" not in inspect.signature(mcp_server.hub_claim_task).parameters
+
+
+def test_setup_cli_rejects_local_with_remote() -> None:
+    with pytest.raises(SystemExit) as excinfo:
+        cli.build_parser().parse_args(["setup", "--local", "--remote", "https://x.invalid/r.git"])
+    assert excinfo.value.code == 2
+    args = cli.build_parser().parse_args(["setup", "--local"])
+    assert args.local is True and args.remote is None

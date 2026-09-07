@@ -6,6 +6,7 @@ import pytest
 
 from agent_hub.hub import Hub
 from agent_hub.policy import DEFAULT_POLICY_TEXT, PolicyError, parse_policy, policy_path
+from agent_hub.sessions import load_record
 from agent_hub.state import State, validate_plan
 
 
@@ -113,3 +114,87 @@ tasks:
     )
     with pytest.raises(ValueError, match="unknown tier"):
         Hub(policy_hub).draft_plan(plan, "codex", "draft")
+
+
+TIERED_PLAN = """id: tiered
+title: Tiered
+goal: g
+tasks:
+  - {id: exec, title: Execute, project: acme-widgets, write_scope: [a/**]}
+  - {id: review, title: Review, read_only: true, tier: frontier}
+"""
+
+
+def _activate_tiered(hub: Hub, tmp_path: Path) -> None:
+    plan = tmp_path / "tiered.yaml"
+    plan.write_text(TIERED_PLAN, encoding="utf-8")
+    hub.draft_plan(plan, "codex", "draft")
+    hub.approve_plan("tiered")
+
+
+def test_brief_declares_session_and_hides_other_tiers(policy_hub: Path, tmp_path: Path) -> None:
+    hub = Hub(policy_hub)
+    _activate_tiered(hub, tmp_path)
+    brief = hub.brief(Path("/tmp"), model="claude-sonnet-5", actor="codex", session="one")
+    assert "Session: codex · claude-sonnet-5 · tier=standard" in brief
+    assert "exec: ready" in brief
+    assert "review: ready" not in brief
+    assert "1 task(s) hidden by tier: 1 frontier" in brief
+    record = load_record("one")
+    assert record is not None and (record.model, record.tier) == ("claude-sonnet-5", "standard")
+
+
+def test_brief_redeclaration_overwrites_record(policy_hub: Path, tmp_path: Path) -> None:
+    hub = Hub(policy_hub)
+    _activate_tiered(hub, tmp_path)
+    hub.brief(Path("/tmp"), model="claude-sonnet-5", actor="codex", session="one")
+    brief = hub.brief(Path("/tmp"), model="claude-opus-5", actor="codex", session="one")
+    assert "tier=frontier" in brief
+    assert "review: ready" in brief
+    assert "1 task(s) hidden by tier: 1 standard" in brief
+    record = load_record("one")
+    assert record is not None and record.model == "claude-opus-5"
+
+
+def test_brief_uses_record_when_no_model_passed(policy_hub: Path, tmp_path: Path) -> None:
+    hub = Hub(policy_hub)
+    _activate_tiered(hub, tmp_path)
+    hub.brief(Path("/tmp"), model="claude-sonnet-5", actor="codex", session="one")
+    brief = hub.brief(Path("/tmp"), actor="codex", session="one")
+    assert "tier=standard" in brief
+
+
+def test_brief_undeclared_shows_nudge_and_everything(policy_hub: Path, tmp_path: Path) -> None:
+    hub = Hub(policy_hub)
+    _activate_tiered(hub, tmp_path)
+    brief = hub.brief(Path("/tmp"), actor="codex", session="one")
+    assert "Session: undeclared — pass model=<your model id> to hub_get_brief" in brief
+    assert "exec: ready" in brief and "review: ready" in brief
+    assert "hidden by tier" not in brief
+
+
+def test_brief_unmapped_model_warns_and_hides_nothing(policy_hub: Path, tmp_path: Path) -> None:
+    hub = Hub(policy_hub)
+    _activate_tiered(hub, tmp_path)
+    brief = hub.brief(Path("/tmp"), model="mystery-9", actor="codex", session="one")
+    assert "tier=unknown" in brief
+    assert "Warning: model mystery-9 is not mapped in memory/policy/tiers.yaml" in brief
+    assert "exec: ready" in brief and "review: ready" in brief
+
+
+def test_brief_without_policy_is_unenforced(hub_repo: Path, tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGENT_HUB_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.delenv("AGENT_HUB_MODEL", raising=False)
+    hub = Hub(hub_repo)
+    _activate_tiered(hub, tmp_path)
+    brief = hub.brief(Path("/tmp"), model="claude-sonnet-5", actor="codex", session="one")
+    assert "tier=unenforced" in brief
+    assert "exec: ready" in brief and "review: ready" in brief
+
+
+def test_env_model_overrides_argument(policy_hub: Path, tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGENT_HUB_MODEL", "claude-opus-5")
+    hub = Hub(policy_hub)
+    _activate_tiered(hub, tmp_path)
+    brief = hub.brief(Path("/tmp"), model="claude-sonnet-5", actor="codex", session="one")
+    assert "claude-opus-5 · tier=frontier" in brief

@@ -23,13 +23,14 @@ from .ids import event_id, normalize_remote, project_id_from_remote, slug
 from .policy import (
     DEFAULT_POLICY_TEXT,
     POLICY_RELATIVE_PATH,
+    UNKNOWN_TIER,
     TierPolicy,
     load_policy,
     parse_policy,
     policy_path,
 )
 from .security import validate_content
-from .sessions import state_root
+from .sessions import record_session, resolve_model, state_root
 from .state import PlanState, State, load_plan, load_state, validate_plan
 
 Mutation = Callable[[State], tuple[dict[str, Any], str]]
@@ -541,12 +542,40 @@ class Hub:
         ranked = sorted(output, key=lambda item: (-item[0], item[1]["path"]))
         return [item for _, item in ranked[:limit]]
 
-    def brief(self, cwd: Path, max_bytes: int = 12_000) -> str:
+    def brief(
+        self,
+        cwd: Path,
+        max_bytes: int = 12_000,
+        model: str | None = None,
+        actor: str = "agent",
+        session: str | None = None,
+    ) -> str:
         project_id, remote = self.project_for_path(cwd)
         state = load_state(self.root)
+        policy = self.policy()
+        resolved_model = resolve_model(session, model)
+        session_tier: str | None = None
+        if resolved_model and policy is not None:
+            session_tier = policy.tier_for_model(resolved_model)
+        if resolved_model and session:
+            record_session(session, actor, resolved_model, session_tier)
+        filtering = policy is not None and session_tier not in {None, UNKNOWN_TIER}
+
         lines = ["# Agent Hub brief", "", f"Project: {project_id or 'unregistered'}"]
         if remote:
             lines.append(f"Remote: {remote}")
+        if resolved_model:
+            tier_display = session_tier or "unenforced"
+            lines.append(f"Session: {actor} · {resolved_model} · tier={tier_display}")
+            if session_tier == UNKNOWN_TIER:
+                lines.append(
+                    f"Warning: model {resolved_model} is not mapped in "
+                    "memory/policy/tiers.yaml; claims will be rejected"
+                )
+        else:
+            lines.append(
+                "Session: undeclared — pass model=<your model id> to hub_get_brief before claiming"
+            )
         lines.extend(["", "## Active plans"])
         for summary in self.list_plans():
             plan_state = state.plans.get(summary["id"])
@@ -561,13 +590,22 @@ class Hub:
             if not relevant:
                 continue
             lines.append(f"- {summary['id']}: {summary['title']}")
+            hidden: dict[str, int] = {}
             for task in relevant:
+                if filtering and policy is not None:
+                    task_tier = policy.task_tier(task)
+                    if task_tier != session_tier:
+                        hidden[task_tier] = hidden.get(task_tier, 0) + 1
+                        continue
                 task_state = plan_state.tasks.get(task["id"])
                 status = task_state.status if task_state else "ready"
                 owner = f" ({task_state.owner})" if task_state and task_state.owner else ""
                 lines.append(f"  - {task['id']}: {status}{owner} — {task['title']}")
                 if task_state and task_state.summary:
                     lines.append(f"    Latest: {task_state.summary}")
+            if hidden:
+                detail = ", ".join(f"{count} {tier}" for tier, count in sorted(hidden.items()))
+                lines.append(f"  - {sum(hidden.values())} task(s) hidden by tier: {detail}")
         lines.extend(["", "## Knowledge"])
         allowed = {"global"}
         if project_id:

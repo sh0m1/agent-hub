@@ -10,16 +10,40 @@ operations to clients that support MCP.
 
 ## Install
 
+One command on a machine that already runs Claude Code and/or Codex CLI:
+
 ```sh
-uv tool install .
+curl -fsSL https://raw.githubusercontent.com/sh0m1/agent-hub/main/install.sh \
+  | sh -s -- --remote https://github.com/you/agent-hub-memory.git
+```
+
+It installs `uv` if missing, installs `agent-hub` pinned to a released tag, and runs
+`agent-hub setup`, which ends with a summary of what was configured. Flags: `--ref <tag>` to pick
+a version, `--keep-claude-memory` to leave Claude Code's automatic memory on, `--dry-run` to print
+the commands without touching anything.
+
+Manual equivalent:
+
+```sh
+uv tool install git+https://github.com/sh0m1/agent-hub@v0.3.0
 agent-hub setup --remote https://github.com/you/agent-hub-memory.git
-agent-hub doctor
-agent-hub scan
 ```
 
 `setup` creates a dedicated runtime clone at `~/.local/share/agent-hub/repo`, adds bounded managed
-blocks to the Codex and Claude user instruction files, and configures the local MCP server. Existing
-configuration is preserved and backed up before it is changed.
+blocks to the Codex and Claude user instruction files, and registers the MCP server with whichever
+of `codex` and `claude` are on `PATH` (others are reported as skipped, not errors). Existing
+configuration is preserved and backed up before it is changed. `agent-hub doctor` and
+`agent-hub scan` remain available for later health checks; `--json` gives machine-readable output.
+
+Upgrade by re-running the one-liner, or:
+
+```sh
+uv tool install --force git+https://github.com/sh0m1/agent-hub@v0.3.0
+agent-hub setup   # the remote is remembered
+```
+
+The remote URL is stored verbatim in `~/.config/agent-hub/config.json` and echoed by `--dry-run`;
+prefer SSH or a credential helper over embedding a token in the URL.
 
 Add repository-level instructions for tools that do not load the user configuration:
 

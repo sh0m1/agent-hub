@@ -21,6 +21,7 @@ from .git import (
 )
 from .ids import event_id, normalize_remote, project_id_from_remote, slug
 from .security import validate_content
+from .sessions import state_root
 from .state import PlanState, State, load_plan, load_state, validate_plan
 
 Mutation = Callable[[State], tuple[dict[str, Any], str]]
@@ -615,13 +616,7 @@ class Hub:
         return str(Path(top.stdout.strip()).resolve()), project_id
 
     def _outbox_root(self) -> Path:
-        configured = os.environ.get("AGENT_HUB_STATE_DIR")
-        base = (
-            Path(configured).expanduser()
-            if configured
-            else Path("~/.local/state/agent-hub").expanduser()
-        )
-        return base / "outbox"
+        return state_root() / "outbox"
 
     def _queue_checkpoint(
         self,

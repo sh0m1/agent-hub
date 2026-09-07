@@ -120,8 +120,8 @@ The brief is the declaration point. `hub_get_brief(cwd=".", model=None)` and
 - Header line: `Session: <actor> · <model> · tier=<tier>`, or when undeclared:
   `Session: undeclared — pass model=<your model id> to hub_get_brief before claiming`.
 - Ready-task filtering: when declared, list only tasks whose tier matches the session. Tasks of
-  other tiers collapse into one line per plan, e.g. `3 frontier tasks hidden`. Undeclared
-  sessions see the full list plus the nudge.
+  other tiers collapse into one line per plan, e.g. `3 task(s) hidden by tier: 3 frontier`.
+  Undeclared sessions see the full list plus the nudge.
 
 Re-declaration: calling brief again with a different model overwrites the record. This is how a
 mid-session model switch is reported. No dedicated declare tool is added; the one call already

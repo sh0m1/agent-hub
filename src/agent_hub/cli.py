@@ -12,7 +12,7 @@ from typing import Any
 
 from .adapters import install_adapters
 from .config import load_profiles, resolve_repo, save_profiles
-from .health import doctor
+from .health import INFORMATIONAL, doctor
 from .hub import Hub, read_frontmatter
 from .policy import PolicyError, policy_path
 from .sessions import record_session, resolve_model
@@ -362,9 +362,7 @@ def format_setup_summary(summary: dict[str, Any]) -> str:
     tool_words = {"configured": "configured", "skipped-not-installed": "not installed, skipped"}
     report = summary["doctor"]
     failing = sorted(
-        key
-        for key, value in report.items()
-        if key not in {"root", "queued_checkpoints", "policy", "ok"} and not value
+        key for key, value in report.items() if key not in INFORMATIONAL and not value
     )
     if str(report["policy"]).startswith("invalid"):
         failing.append("policy")

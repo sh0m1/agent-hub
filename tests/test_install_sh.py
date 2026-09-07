@@ -41,7 +41,7 @@ def test_install_sh_dry_run_prints_commands_and_touches_nothing(
     assert result.returncode == 0, result.stderr
     out = result.stdout
     assert "[dry-run] sh -c curl -fsSL https://astral.sh/uv/install.sh | sh" in out
-    assert "[dry-run] uv tool install --force git+https://github.com/sh0m1/agent-hub@v0.6.0" in out
+    assert "[dry-run] uv tool install --force git+https://github.com/sh0m1/agent-hub@v0.6.1" in out
     assert "[dry-run] agent-hub setup --remote https://example.invalid/m.git" in out
     assert not (tmp_path / "home").exists()
 

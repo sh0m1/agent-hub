@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from collections.abc import Callable
@@ -13,6 +14,12 @@ from .sessions import default_home
 
 Which = Callable[[str], str | None]
 Runner = Callable[..., subprocess.CompletedProcess]
+
+# Keys in a doctor report that describe state rather than pass/fail checks.
+INFORMATIONAL = frozenset(
+    {"root", "queued_checkpoints", "policy", "remote", "profile", "mcp_pinned", "ok"}
+)
+_PINNED_ASSIGNMENT = re.compile(r"^\s*AGENT_HUB_REPO\s*=")
 
 
 def doctor(
@@ -41,9 +48,8 @@ def doctor(
     checks["claude_instructions"] = (home / ".claude" / "CLAUDE.md").exists()
     checks["remote"] = remote_url(hub.root)
     checks["mcp_pinned"] = pinned_mcp_registrations(home, which=which, runner=runner)
-    informational = {"root", "queued_checkpoints", "policy", "remote", "profile", "mcp_pinned"}
     checks["ok"] = all(
-        value for key, value in checks.items() if key not in informational
+        value for key, value in checks.items() if key not in INFORMATIONAL
     ) and not str(checks["policy"]).startswith("invalid")
     return checks
 
@@ -61,10 +67,12 @@ def pinned_mcp_registrations(
             pinned.append("claude")
     if which("codex"):
         config = home / ".codex" / "config.toml"
-        if config.exists() and "AGENT_HUB_REPO" in codex_agent_hub_block(
-            config.read_text(encoding="utf-8")
-        ):
-            pinned.append("codex")
+        if config.exists():
+            block = codex_agent_hub_block(config.read_text(encoding="utf-8"))
+            # A pinned value is an assignment `AGENT_HUB_REPO = "..."` in the env sub-table;
+            # the name also appears inside the `env_vars` forwarding list, which is fine.
+            if any(_PINNED_ASSIGNMENT.match(line) for line in block.splitlines()):
+                pinned.append("codex")
     return pinned
 
 

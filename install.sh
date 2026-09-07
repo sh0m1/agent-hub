@@ -7,7 +7,7 @@
 # setup is idempotent and remembers the remote.
 set -eu
 
-DEFAULT_REF="v0.6.0"
+DEFAULT_REF="v0.6.1"
 REPO_URL="https://github.com/sh0m1/agent-hub"
 
 REMOTE=""

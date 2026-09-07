@@ -68,6 +68,10 @@ an earlier brief for the same session id. Records live in the local state direct
 never committed. A declared brief lists only tasks of the session's tier and reports how many
 tasks of other tiers were hidden.
 
+Tiers guard against accidental misrouting, not against a hostile agent: any session with write
+access to the runtime clone could edit `tiers.yaml` or self-report a different model. Treat the
+policy as a coordination convention, not a security boundary.
+
 A claim is rejected when the session is undeclared, when its model is unmapped, or when its tier
 differs from the task's tier. The claim event records `model`, `tier`, and `tier_override`.
 Heartbeats, checkpoints, and completion do not re-check the tier; the guard is at pickup.

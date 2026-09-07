@@ -49,6 +49,24 @@ def hub_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 @pytest.fixture
+def local_hub(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A runtime repository with no remote at all."""
+    runtime = tmp_path / "local-runtime"
+    subprocess.run(["git", "init", "-b", "main", str(runtime)], check=True, capture_output=True)
+    git(runtime, "config", "user.email", "test@example.com")
+    git(runtime, "config", "user.name", "Agent Hub Test")
+    (runtime / "memory").mkdir()
+    (runtime / "memory" / "README.md").write_text("# Memory\n", encoding="utf-8")
+    git(runtime, "add", "memory")
+    git(runtime, "commit", "-m", "init")
+    (runtime / ".agent-hub-managed").touch()
+    monkeypatch.setenv("AGENT_HUB_TESTING", "1")
+    monkeypatch.setenv("AGENT_HUB_LOCK_DIR", str(tmp_path / "locks"))
+    monkeypatch.setenv("AGENT_HUB_STATE_DIR", str(tmp_path / "state"))
+    return runtime
+
+
+@pytest.fixture
 def plan_file(tmp_path: Path) -> Path:
     path = tmp_path / "plan.yaml"
     path.write_text(

@@ -42,6 +42,17 @@ def is_managed_clone(root: Path) -> bool:
     return (root / ".agent-hub-managed").exists() or os.environ.get("AGENT_HUB_TESTING") == "1"
 
 
+def remote_url(root: Path) -> str | None:
+    """The origin URL of a runtime clone, or None for a local-only hub."""
+    result = run_git(root, "remote", "get-url", "origin", check=False)
+    url = result.stdout.strip()
+    return url if result.returncode == 0 and url else None
+
+
+def has_remote(root: Path) -> bool:
+    return remote_url(root) is not None
+
+
 def assert_clean(root: Path) -> None:
     status = run_git(root, "status", "--porcelain", "--untracked-files=no").stdout.strip()
     if status:
@@ -49,6 +60,8 @@ def assert_clean(root: Path) -> None:
 
 
 def sync_from_remote(root: Path) -> None:
+    if not has_remote(root):
+        return
     run_git(root, "fetch", "origin", "main")
     local = run_git(root, "rev-parse", "HEAD").stdout.strip()
     remote = run_git(root, "rev-parse", "origin/main").stdout.strip()
@@ -66,6 +79,8 @@ def commit_and_push(root: Path, message: str) -> bool:
     if staged.returncode == 0:
         raise GitError("Operation produced no durable state")
     run_git(root, "commit", "-m", message)
+    if not has_remote(root):
+        return True  # local-only hub: the repository lock is the whole concurrency story
     pushed = run_git(root, "push", "origin", "HEAD:main", check=False)
     return pushed.returncode == 0
 

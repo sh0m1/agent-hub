@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .git import is_managed_clone, run_git
+from .git import is_managed_clone, remote_url, run_git
 from .hub import Hub
 from .policy import PolicyError
 from .sessions import default_home
@@ -26,7 +26,8 @@ def doctor(hub: Hub, home: Path | None = None) -> dict[str, Any]:
     checks["queued_checkpoints"] = len(list(hub._outbox_root().glob("*.json")))
     checks["codex_instructions"] = (home / ".codex" / "AGENTS.md").exists()
     checks["claude_instructions"] = (home / ".claude" / "CLAUDE.md").exists()
-    informational = {"root", "queued_checkpoints", "policy"}
+    checks["remote"] = remote_url(hub.root)
+    informational = {"root", "queued_checkpoints", "policy", "remote"}
     checks["ok"] = all(
         value for key, value in checks.items() if key not in informational
     ) and not str(checks["policy"]).startswith("invalid")

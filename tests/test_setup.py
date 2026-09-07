@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
-from conftest import which_for
+from conftest import git, which_for
 
 from agent_hub.health import doctor
 from agent_hub.hub import Hub
@@ -59,12 +60,44 @@ def test_setup_remembers_remote_on_second_run(
     assert json.loads(saved) == {"repo": str(runtime.resolve()), "remote": bare_remote}
 
 
-def test_setup_without_remote_and_no_config_raises_with_guidance(
-    tmp_path: Path, fake_home: Path, recording_runner
+def test_setup_without_remote_creates_a_local_hub(
+    tmp_path: Path, fake_home: Path, recording_runner, monkeypatch
 ) -> None:
+    monkeypatch.setenv("AGENT_HUB_TESTING", "1")
+    monkeypatch.setenv("AGENT_HUB_LOCK_DIR", str(tmp_path / "locks"))
     _, runner = recording_runner
-    with pytest.raises(RuntimeError, match="--remote"):
-        _setup(None, tmp_path / "rt", fake_home, which_for("agent-hub-mcp"), runner)
+    runtime = tmp_path / "rt"
+    summary = _setup(None, runtime, fake_home, which_for("agent-hub-mcp"), runner)
+    assert summary["remote"] is None
+    assert summary["ok"] is True
+    assert summary["policy"] == "created"
+    assert summary["doctor"]["remote"] is None
+    assert (runtime / "memory" / "README.md").exists()
+    assert (runtime / "memory" / "policy" / "tiers.yaml").exists()
+    assert git(runtime, "status", "--porcelain", "--untracked-files=no") == ""
+    assert json.loads(config_path(fake_home).read_text(encoding="utf-8"))["remote"] is None
+    again = _setup(None, runtime, fake_home, which_for("agent-hub-mcp"), runner)
+    assert again["remote"] is None and again["policy"] == "already-present"
+
+
+def test_setup_attaches_a_remote_to_an_existing_local_hub(
+    tmp_path: Path, fake_home: Path, recording_runner, monkeypatch
+) -> None:
+    monkeypatch.setenv("AGENT_HUB_TESTING", "1")
+    monkeypatch.setenv("AGENT_HUB_LOCK_DIR", str(tmp_path / "locks"))
+    _, runner = recording_runner
+    runtime = tmp_path / "rt"
+    _setup(None, runtime, fake_home, which_for("agent-hub-mcp"), runner)
+    bare = tmp_path / "later.git"
+    subprocess.run(["git", "init", "--bare", str(bare)], check=True, capture_output=True)
+    summary = _setup(str(bare), runtime, fake_home, which_for("agent-hub-mcp"), runner)
+    assert summary["remote"] == str(bare)
+    assert summary["doctor"]["remote"] == str(bare)
+    assert git(runtime, "remote", "get-url", "origin") == str(bare)
+    assert git(bare, "rev-parse", "main") == git(runtime, "rev-parse", "main")
+    assert json.loads(config_path(fake_home).read_text(encoding="utf-8"))["remote"] == str(bare)
+    hub_summary_after_claimless_mutation = Hub(runtime).ensure_policy()
+    assert hub_summary_after_claimless_mutation is None
 
 
 def test_setup_requires_mcp_executable_with_path_hint(

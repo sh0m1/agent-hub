@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .git import has_remote
 from .health import doctor
 from .hub import Hub
 from .sessions import default_home
@@ -75,8 +76,6 @@ def setup(
     home = (home or default_home()).expanduser()
     runtime = runtime.expanduser().resolve()
     remote = remote or load_config(home).get("remote")
-    if not remote:
-        raise RuntimeError("No remote configured. Run: agent-hub setup --remote <git-url>")
     executable = which("agent-hub-mcp")
     if not executable:
         raise RuntimeError(
@@ -86,7 +85,13 @@ def setup(
 
     if not runtime.exists():
         runtime.parent.mkdir(parents=True, exist_ok=True)
-        runner(["git", "clone", remote, str(runtime)], check=True)
+        if remote:
+            runner(["git", "clone", remote, str(runtime)], check=True)
+        else:
+            _init_local_repo(runtime, runner)
+    elif remote and not has_remote(runtime):
+        runner(["git", "-C", str(runtime), "remote", "add", "origin", remote], check=True)
+        runner(["git", "-C", str(runtime), "push", "-q", "-u", "origin", "main"], check=True)
     (runtime / ".agent-hub-managed").touch()
     policy = "created" if Hub(runtime).ensure_policy() else "already-present"
 
@@ -143,6 +148,33 @@ def setup(
         "doctor": report,
         "scan": hub.scan(),
     }
+
+
+def _init_local_repo(runtime: Path, runner: Runner) -> None:
+    runner(["git", "init", "-q", "-b", "main", str(runtime)], check=True)
+    memory = runtime / "memory"
+    memory.mkdir()
+    (memory / "README.md").write_text(MEMORY_README, encoding="utf-8")
+    runner(["git", "-C", str(runtime), "add", "memory"], check=True)
+    runner(
+        ["git", "-C", str(runtime), "commit", "-q", "-m", "hub: initialize local memory"],
+        check=True,
+    )
+
+
+MEMORY_README = """# Agent Hub memory
+
+This directory is the canonical readable state. Do not edit event files or approved plan revisions
+in place; use the CLI or MCP tools so concurrent changes are validated and published atomically.
+
+- `knowledge/` contains versioned Markdown entries.
+- `plans/` contains immutable YAML plan revisions.
+- `events/` contains immutable JSON state transitions.
+- `policy/` contains the execution tier policy.
+- `workspaces/` describes groups of related projects.
+
+No credentials, `.env` contents, private keys, or raw agent transcripts belong here.
+"""
 
 
 def _merge_and_report(path: Path) -> str:

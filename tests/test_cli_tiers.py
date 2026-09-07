@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import builtins
 import inspect
+import os
 import sys
 from pathlib import Path
 
@@ -48,15 +49,23 @@ def test_brief_model_flag_declares_env_session(
     assert record is not None and record.model == "claude-sonnet-5"
 
 
-def test_brief_without_session_env_does_not_write_a_record(
+def test_brief_without_session_env_uses_the_terminal_session(
     policy_hub: Path, tmp_path: Path, monkeypatch
 ) -> None:
     _activate(policy_hub, tmp_path)
     monkeypatch.delenv("AGENT_HUB_SESSION", raising=False)
+    expected = f"shell-{os.getppid()}"
+    assert cli.default_session() == expected
+    assert cli.default_session() == expected
     _run(policy_hub, "brief", "--cwd", "/tmp", "--model", "claude-sonnet-5")
-    from agent_hub.sessions import sessions_root
-
-    assert not sessions_root().exists() or not list(sessions_root().iterdir())
+    record = load_record(expected)
+    assert record is not None and record.model == "claude-sonnet-5"
+    worktree = project(tmp_path / "work")
+    event = _run(policy_hub, "task", "claim", "tiered", "exec", "--cwd", str(worktree))
+    assert event["session"] == expected
+    assert event["payload"]["tier"] == "standard"
+    monkeypatch.setenv("AGENT_HUB_SESSION", "explicit")
+    assert cli.default_session() == "explicit"
 
 
 def test_task_ready_tier_filter(policy_hub: Path, tmp_path: Path) -> None:

@@ -19,11 +19,14 @@ from .setup import setup
 from .state import load_plan
 
 
+def default_session() -> str:
+    """AGENT_HUB_SESSION when set; otherwise an id stable for the life of this terminal."""
+    return os.environ.get("AGENT_HUB_SESSION") or f"shell-{os.getppid()}"
+
+
 def actor_session(args: argparse.Namespace) -> tuple[str, str]:
     actor = getattr(args, "actor", None) or os.environ.get("AGENT_HUB_ACTOR", "agent")
-    session = getattr(args, "session", None) or os.environ.get(
-        "AGENT_HUB_SESSION", str(uuid.uuid4())
-    )
+    session = getattr(args, "session", None) or default_session()
     return actor, session
 
 
@@ -213,7 +216,7 @@ def dispatch(args: argparse.Namespace) -> Any:
             Path(args.cwd),
             model=args.model,
             actor=os.environ.get("AGENT_HUB_ACTOR", "agent"),
-            session=os.environ.get("AGENT_HUB_SESSION") or None,
+            session=default_session(),
         )
     if args.command == "policy":
         return policy_report(hub, validate_only=args.policy_command == "validate")
@@ -332,7 +335,8 @@ def format_setup_summary(summary: dict[str, Any]) -> str:
     lines = [
         "Agent Hub setup " + ("complete" if summary["ok"] else "finished with problems"),
         f"  runtime:  {summary['runtime']}",
-        f"  remote:   {summary['remote']}",
+        "  remote:   "
+        + (summary["remote"] or "local only (share it later: agent-hub setup --remote <url>)"),
         f"  codex:    {tool_words[summary['tools']['codex']]}",
         f"  claude:   {tool_words[summary['tools']['claude']]}",
         f"  policy:   {summary['policy'].replace('-', ' ')}",
@@ -390,7 +394,7 @@ def policy_report(hub: Hub, validate_only: bool) -> dict[str, Any]:
         return report
     report["default_task_tier"] = policy.default_task_tier
     report["tiers"] = {name: list(patterns) for name, patterns in policy.tiers.items()}
-    session = os.environ.get("AGENT_HUB_SESSION") or None
+    session = default_session()
     model = resolve_model(session)
     report["session"] = {
         "session": session,

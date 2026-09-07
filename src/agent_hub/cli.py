@@ -273,7 +273,15 @@ def dispatch(args: argparse.Namespace) -> Any:
             if args.allow_tier_mismatch:
                 if os.environ.get("AGENT_HUB_AGENT_SESSION"):
                     raise ValueError("Tier override is unavailable inside a managed agent session")
-                require_human_confirmation(args.task_id, False, "override tier for", noun="task")
+                require_human_confirmation(
+                    args.task_id,
+                    False,
+                    "override tier for",
+                    noun="task",
+                    flag_hint=None,
+                    label="Tier override",
+                    prompt=f"Override tier for task {args.task_id}? Type its id: ",
+                )
             return hub.claim_task(
                 args.plan_id,
                 args.task_id,
@@ -330,14 +338,28 @@ def doctor(hub: Hub) -> dict[str, Any]:
     return checks
 
 
-def require_human_confirmation(identifier: str, yes: bool, action: str, noun: str = "plan") -> None:
+def require_human_confirmation(
+    identifier: str,
+    yes: bool,
+    action: str,
+    noun: str = "plan",
+    flag_hint: str | None = "--yes",
+    label: str | None = None,
+    prompt: str | None = None,
+) -> None:
     if yes:
         return
+    subject = label if label is not None else f"{noun.title()} {action}"
     if not sys.stdin.isatty():
-        raise ValueError(f"{noun.title()} {action} requires an interactive terminal or --yes")
-    answer = input(f"{action.title()} {noun} {identifier}? Type its id: ")
+        hint = f" or {flag_hint}" if flag_hint else ""
+        raise ValueError(f"{subject} requires an interactive terminal{hint}")
+    if prompt is not None:
+        question = prompt
+    else:
+        question = f"{action.title()} {noun} {identifier}? Type its id: "
+    answer = input(question)
     if answer != identifier:
-        raise ValueError(f"{noun.title()} {action} cancelled")
+        raise ValueError(f"{subject} cancelled")
 
 
 def policy_report(hub: Hub, validate_only: bool) -> dict[str, Any]:

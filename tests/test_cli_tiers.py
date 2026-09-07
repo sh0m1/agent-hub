@@ -92,8 +92,9 @@ def test_override_requires_tty_and_confirmation(
     monkeypatch.delenv("AGENT_HUB_AGENT_SESSION")
 
     monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
-    with pytest.raises(ValueError, match="interactive terminal"):
+    with pytest.raises(ValueError, match="interactive terminal") as excinfo:
         _run(policy_hub, *base, "--allow-tier-mismatch")
+    assert "--yes" not in str(excinfo.value)
 
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(builtins, "input", lambda _prompt: "wrong")

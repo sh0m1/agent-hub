@@ -8,10 +8,19 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .config import (
+    config_path,
+    load_profiles,
+    profile_runtime,
+    save_profiles,
+    validate_profile_name,
+)
 from .git import has_remote, remote_url
 from .health import doctor
 from .hub import Hub
 from .sessions import default_home
+
+__all__ = ["INSTRUCTIONS", "config_path", "merge_managed_block", "setup"]
 
 MANAGED_START = "<!-- BEGIN AGENT HUB MANAGED -->"
 MANAGED_END = "<!-- END AGENT HUB MANAGED -->"
@@ -28,6 +37,18 @@ transcripts. Keep one stable session ID across standalone CLI task calls. User i
 always take precedence over Agent Hub state.
 {MANAGED_END}
 """
+
+# Codex starts MCP servers with a whitelisted environment; these are forwarded explicitly so a
+# terminal's AGENT_HUB_* settings reach the server exactly as they do under Claude Code.
+CODEX_FORWARDED_ENV = [
+    "AGENT_HUB_PROFILE",
+    "AGENT_HUB_REPO",
+    "AGENT_HUB_HOME",
+    "AGENT_HUB_STATE_DIR",
+    "AGENT_HUB_MODEL",
+    "AGENT_HUB_SESSION",
+    "AGENT_HUB_ACTOR",
+]
 
 Which = Callable[[str], str | None]
 Runner = Callable[..., subprocess.CompletedProcess]
@@ -51,34 +72,28 @@ def merge_managed_block(path: Path, content: str = INSTRUCTIONS, backup: bool = 
     path.write_text(updated, encoding="utf-8")
 
 
-def config_path(home: Path | None = None) -> Path:
-    return (home or default_home()) / ".config" / "agent-hub" / "config.json"
-
-
-def load_config(home: Path | None = None) -> dict[str, Any]:
-    path = config_path(home)
-    if not path.exists():
-        return {}
-    data = json.loads(path.read_text(encoding="utf-8"))
-    return data if isinstance(data, dict) else {}
-
-
 def setup(
     remote: str | None,
-    runtime: Path,
+    runtime: Path | None = None,
     disable_claude_memory: bool = True,
     *,
     home: Path | None = None,
     local: bool = False,
+    profile: str | None = None,
+    make_default: bool = False,
     which: Which = shutil.which,
     runner: Runner = subprocess.run,
 ) -> dict[str, Any]:
-    """Install or refresh the local Agent Hub. Idempotent; returns a summary of what was done."""
+    """Install or refresh one hub profile. Idempotent; returns a summary of what was done."""
     if local and remote:
         raise ValueError("--local and --remote cannot be combined")
     home = (home or default_home()).expanduser()
-    runtime = runtime.expanduser().resolve()
-    remote = None if local else (remote or load_config(home).get("remote"))
+    profiles = load_profiles(home)
+    name = validate_profile_name(profile or profiles.default or "default")
+    entry = profiles.profiles.get(name, {})
+    runtime = (runtime or Path(entry.get("repo") or profile_runtime(name, home))).expanduser()
+    runtime = runtime.resolve()
+    remote = None if local else (remote or entry.get("remote"))
     executable = which("agent-hub-mcp")
     if not executable:
         raise RuntimeError(
@@ -100,11 +115,13 @@ def setup(
         runner(["git", "-C", str(runtime), "remote", "add", "origin", remote], check=True)
         runner(["git", "-C", str(runtime), "push", "-q", "-u", "origin", "main"], check=True)
     (runtime / ".agent-hub-managed").touch()
-    policy = "created" if Hub(runtime).ensure_policy() else "already-present"
+    hub = Hub(runtime, profile=name)
+    policy = "created" if hub.ensure_policy() else "already-present"
 
-    config = config_path(home)
-    config.parent.mkdir(parents=True, exist_ok=True)
-    config.write_text(json.dumps({"repo": str(runtime), "remote": remote}, indent=2) + "\n")
+    profiles.profiles[name] = {"repo": str(runtime), "remote": remote}
+    if make_default or not profiles.default:
+        profiles.default = name
+    save_profiles(profiles, home)
 
     instructions = {
         "codex_agents_md": _merge_and_report(home / ".codex" / "AGENTS.md"),
@@ -112,11 +129,10 @@ def setup(
     }
     memory_disabled = disable_claude_memory and _disable_claude_memory(home)
 
-    env = f"AGENT_HUB_REPO={runtime}"
     tools = {
         "codex": _replace_mcp(
             "codex",
-            ["codex", "mcp", "add", "agent-hub", "--env", env, "--", executable],
+            ["codex", "mcp", "add", "agent-hub", "--", executable],
             which=which,
             runner=runner,
         ),
@@ -131,8 +147,6 @@ def setup(
                 "--scope",
                 "user",
                 "agent-hub",
-                "--env",
-                env,
                 "--",
                 executable,
             ],
@@ -140,14 +154,17 @@ def setup(
             runner=runner,
         ),
     }
+    if tools["codex"] == "configured":
+        _ensure_codex_env_vars(home / ".codex" / "config.toml")
 
-    hub = Hub(runtime)
-    report = doctor(hub, home=home)
+    report = doctor(hub, home=home, which=which, runner=runner)
     return {
         "ok": bool(report["ok"]),
+        "profile": name,
+        "default_profile": profiles.default,
         "runtime": str(runtime),
         "remote": remote,
-        "config_path": str(config),
+        "config_path": str(config_path(home)),
         "tools": tools,
         "instructions": instructions,
         "claude_memory_disabled": memory_disabled,
@@ -217,3 +234,27 @@ def _replace_mcp(
     runner([tool, "mcp", "remove", "agent-hub"], check=False, capture_output=True)
     runner(add_command, check=True)
     return "configured"
+
+
+def _ensure_codex_env_vars(config: Path) -> bool:
+    """Insert or refresh `env_vars` in Codex's `[mcp_servers.agent-hub]` table. Idempotent."""
+    if not config.exists():
+        return False
+    lines = config.read_text(encoding="utf-8").splitlines()
+    try:
+        start = lines.index("[mcp_servers.agent-hub]")
+    except ValueError:
+        return False
+    wanted = f"env_vars = {json.dumps(CODEX_FORWARDED_ENV)}"
+    end = start + 1
+    while end < len(lines) and not lines[end].startswith("["):
+        if lines[end].split("=", 1)[0].strip() == "env_vars":
+            if lines[end] == wanted:
+                return True
+            lines[end] = wanted
+            config.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            return True
+        end += 1
+    lines.insert(start + 1, wanted)
+    config.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return True

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .adapters import install_adapters
+from .config import load_profiles, resolve_repo, save_profiles
 from .health import doctor
 from .hub import Hub, read_frontmatter
 from .policy import PolicyError, policy_path
@@ -74,8 +75,20 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Keep the memory on this machine only; detaches and forgets any remote",
     )
-    setup_parser.add_argument("--runtime", default="~/.local/share/agent-hub/repo")
+    setup_parser.add_argument(
+        "--profile", help="Hub profile to create or refresh (default: the default profile)"
+    )
+    setup_parser.add_argument(
+        "--default", action="store_true", help="Make this profile the default"
+    )
+    setup_parser.add_argument("--runtime", help="Override the profile's runtime clone path")
     setup_parser.add_argument("--keep-claude-memory", action="store_true")
+
+    profile_parser = commands.add_parser("profile")
+    profile_commands = profile_parser.add_subparsers(dest="profile_command", required=True)
+    profile_commands.add_parser("list")
+    profile_default = profile_commands.add_parser("default")
+    profile_default.add_argument("name")
 
     adapter = commands.add_parser("adapter")
     adapter_commands = adapter.add_subparsers(dest="adapter_command", required=True)
@@ -200,9 +213,18 @@ def main() -> None:
 def dispatch(args: argparse.Namespace) -> Any:
     if args.command == "setup":
         summary = setup(
-            args.remote, Path(args.runtime), not args.keep_claude_memory, local=args.local
+            args.remote,
+            Path(args.runtime) if args.runtime else None,
+            not args.keep_claude_memory,
+            local=args.local,
+            profile=args.profile,
+            make_default=args.default,
         )
         return summary if args.json else format_setup_summary(summary)
+    if args.command == "profile":
+        if args.profile_command == "default":
+            return set_default_profile(args.name)
+        return profile_report(as_json=args.json)
     if args.command == "adapter":
         tools = [tool.strip() for tool in args.tools.split(",") if tool.strip()]
         return {"written": install_adapters(Path(args.path), tools)}
@@ -346,8 +368,10 @@ def format_setup_summary(summary: dict[str, Any]) -> str:
     )
     if str(report["policy"]).startswith("invalid"):
         failing.append("policy")
+    default_marker = " (default)" if summary["profile"] == summary["default_profile"] else ""
     lines = [
         "Agent Hub setup " + ("complete" if summary["ok"] else "finished with problems"),
+        f"  profile:  {summary['profile']}{default_marker}",
         f"  runtime:  {summary['runtime']}",
         "  remote:   " + _remote_line(summary),
         f"  codex:    {tool_words[summary['tools']['codex']]}",
@@ -362,7 +386,72 @@ def format_setup_summary(summary: dict[str, Any]) -> str:
             f"Next: install {', '.join(skipped)} and re-run `agent-hub setup` to register the "
             "MCP server there."
         )
+    pinned = report.get("mcp_pinned") or []
+    if pinned:
+        lines.append(
+            f"Next: the {', '.join(pinned)} MCP registration still pins a hub path; re-run "
+            "`agent-hub setup` after upgrading so AGENT_HUB_PROFILE takes effect."
+        )
     return "\n".join(lines) + "\n"
+
+
+def profile_report(as_json: bool) -> Any:
+    profiles = load_profiles()
+    error: str | None = None
+    resolution = None
+    try:
+        resolution = resolve_repo(None)
+    except ValueError as exc:
+        error = str(exc)
+    current = resolution.profile if resolution else None
+    entries = [
+        {
+            "name": name,
+            "repo": entry.get("repo"),
+            "remote": entry.get("remote"),
+            "default": name == profiles.default,
+            "current": name == current,
+        }
+        for name, entry in sorted(profiles.profiles.items())
+    ]
+    data = {
+        "profiles": entries,
+        "default": profiles.default,
+        "current": current,
+        "source": resolution.source if resolution else None,
+        "overridden_profile": resolution.overridden_profile if resolution else None,
+        "error": error,
+    }
+    if as_json:
+        return data
+    lines: list[str] = []
+    if not entries:
+        lines.append("No hub profiles configured; run `agent-hub setup [--profile NAME]`.")
+    for entry in entries:
+        markers = ("* " if entry["default"] else "  ") + ("← " if entry["current"] else "  ")
+        where = entry["remote"] or "local only"
+        lines.append(f"{markers}{entry['name']:<12} {where:<44} {entry['repo']}")
+    if resolution and resolution.source == "explicit":
+        lines.append(f"Current hub: explicit path {resolution.root} (AGENT_HUB_REPO or --repo)")
+        if resolution.overridden_profile:
+            lines.append(
+                f"Warning: this overrides AGENT_HUB_PROFILE={resolution.overridden_profile}"
+            )
+    elif resolution:
+        lines.append(f"Current hub: {resolution.profile} (via {resolution.source})")
+    if error:
+        lines.append(f"Error: {error}")
+    return "\n".join(lines) + "\n"
+
+
+def set_default_profile(name: str) -> dict[str, Any]:
+    profiles = load_profiles()
+    if name not in profiles.profiles:
+        names = ", ".join(sorted(profiles.profiles)) or "none"
+        raise ValueError(f"Unknown hub profile '{name}'; configured: {names}")
+    profiles.default = name
+    save_profiles(profiles)
+    return {"default": name}
 
 
 def require_human_confirmation(

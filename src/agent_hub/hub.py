@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import time
 from collections.abc import Callable
@@ -11,11 +10,13 @@ from typing import Any
 
 import yaml
 
+from .config import resolve_repo
 from .git import (
     GitError,
     assert_clean,
     commit_and_push,
     recover_after_rejected_push,
+    remote_url,
     repository_lock,
     sync_from_remote,
 )
@@ -67,15 +68,17 @@ def scopes_overlap(left: list[str], right: list[str]) -> bool:
 
 
 class Hub:
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, profile: str | None = None) -> None:
         self.root = root.resolve()
+        self.profile = profile
+        self.overridden_profile: str | None = None
 
     @classmethod
     def from_environment(cls, root: str | None = None) -> Hub:
-        configured = root or os.environ.get("AGENT_HUB_REPO")
-        if configured:
-            return cls(Path(configured).expanduser())
-        return cls(Path("~/.local/share/agent-hub/repo").expanduser())
+        resolution = resolve_repo(root)
+        hub = cls(resolution.root, profile=resolution.profile)
+        hub.overridden_profile = resolution.overridden_profile
+        return hub
 
     def _write_event(self, event: dict[str, Any]) -> Path:
         validate_content(json.dumps(event), "event.json")
@@ -603,6 +606,13 @@ class Hub:
         filtering = policy is not None and session_tier not in {None, UNKNOWN_TIER}
 
         lines = ["# Agent Hub brief", "", f"Project: {project_id or 'unregistered'}"]
+        if self.profile:
+            lines.append(f"Hub: {self.profile} · {remote_url(self.root) or 'local only'}")
+        if self.overridden_profile:
+            lines.append(
+                f"Warning: AGENT_HUB_REPO overrides AGENT_HUB_PROFILE={self.overridden_profile}; "
+                f"this session writes to {self.root}"
+            )
         if remote:
             lines.append(f"Remote: {remote}")
         if resolved_model:

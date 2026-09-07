@@ -33,3 +33,24 @@ def test_doctor_reports_local_hubs(local_hub: Path, fake_home: Path) -> None:
     report = doctor(Hub(local_hub), home=fake_home)
     assert report["remote"] is None
     assert report["git"] is True
+
+
+def test_doctor_reports_profile_and_unpinned_mcp(local_hub: Path, fake_home: Path) -> None:
+    from conftest import which_for
+
+    report = doctor(Hub(local_hub, profile="private"), home=fake_home, which=which_for())
+    assert report["profile"] == "private"
+    assert report["mcp_pinned"] == []
+
+
+def test_doctor_flags_pinned_codex_registration(local_hub: Path, fake_home: Path) -> None:
+    from conftest import which_for
+
+    codex = fake_home / ".codex" / "config.toml"
+    codex.parent.mkdir()
+    codex.write_text(
+        '[mcp_servers.agent-hub]\ncommand = "x"\n\n[mcp_servers.agent-hub.env]\n'
+        'AGENT_HUB_REPO = "/old"\n'
+    )
+    report = doctor(Hub(local_hub), home=fake_home, which=which_for("codex"))
+    assert report["mcp_pinned"] == ["codex"]

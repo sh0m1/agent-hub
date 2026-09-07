@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import shutil
+import subprocess
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -8,11 +11,21 @@ from .hub import Hub
 from .policy import PolicyError
 from .sessions import default_home
 
+Which = Callable[[str], str | None]
+Runner = Callable[..., subprocess.CompletedProcess]
 
-def doctor(hub: Hub, home: Path | None = None) -> dict[str, Any]:
+
+def doctor(
+    hub: Hub,
+    home: Path | None = None,
+    *,
+    which: Which = shutil.which,
+    runner: Runner = subprocess.run,
+) -> dict[str, Any]:
     """Read-only health report for a runtime clone and the user's tool configuration."""
     home = home or default_home()
     checks: dict[str, Any] = {"root": str(hub.root), "managed_clone": is_managed_clone(hub.root)}
+    checks["profile"] = hub.profile
     status = run_git(hub.root, "status", "--porcelain", "--untracked-files=no").stdout
     checks["git"] = status.strip() == ""
     try:
@@ -27,8 +40,44 @@ def doctor(hub: Hub, home: Path | None = None) -> dict[str, Any]:
     checks["codex_instructions"] = (home / ".codex" / "AGENTS.md").exists()
     checks["claude_instructions"] = (home / ".claude" / "CLAUDE.md").exists()
     checks["remote"] = remote_url(hub.root)
-    informational = {"root", "queued_checkpoints", "policy", "remote"}
+    checks["mcp_pinned"] = pinned_mcp_registrations(home, which=which, runner=runner)
+    informational = {"root", "queued_checkpoints", "policy", "remote", "profile", "mcp_pinned"}
     checks["ok"] = all(
         value for key, value in checks.items() if key not in informational
     ) and not str(checks["policy"]).startswith("invalid")
     return checks
+
+
+def pinned_mcp_registrations(
+    home: Path, *, which: Which = shutil.which, runner: Runner = subprocess.run
+) -> list[str]:
+    """Tools whose agent-hub MCP registration still bakes in AGENT_HUB_REPO (pre-0.6 setups)."""
+    pinned: list[str] = []
+    if which("claude"):
+        result = runner(
+            ["claude", "mcp", "get", "agent-hub"], check=False, capture_output=True, text=True
+        )
+        if "AGENT_HUB_REPO=" in (result.stdout or ""):
+            pinned.append("claude")
+    if which("codex"):
+        config = home / ".codex" / "config.toml"
+        if config.exists() and "AGENT_HUB_REPO" in codex_agent_hub_block(
+            config.read_text(encoding="utf-8")
+        ):
+            pinned.append("codex")
+    return pinned
+
+
+def codex_agent_hub_block(text: str) -> str:
+    """The `[mcp_servers.agent-hub]` table and its sub-tables from a Codex config.toml."""
+    lines = text.splitlines()
+    try:
+        start = lines.index("[mcp_servers.agent-hub]")
+    except ValueError:
+        return ""
+    block = [lines[start]]
+    for line in lines[start + 1 :]:
+        if line.startswith("[") and not line.startswith("[mcp_servers.agent-hub"):
+            break
+        block.append(line)
+    return "\n".join(block)

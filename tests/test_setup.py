@@ -45,6 +45,11 @@ def _setup(remote: str | None, runtime: Path, home: Path, which, runner, **kwarg
     return setup(remote, runtime, home=home, which=which, runner=runner, **kwargs)
 
 
+def _configured_remote(home: Path) -> str | None:
+    data = json.loads(config_path(home).read_text(encoding="utf-8"))
+    return data["profiles"]["default"]["remote"]
+
+
 def test_setup_remembers_remote_on_second_run(
     bare_remote: str, tmp_path: Path, fake_home: Path, recording_runner
 ) -> None:
@@ -57,7 +62,9 @@ def test_setup_remembers_remote_on_second_run(
     second = _setup(None, runtime, fake_home, which_for("agent-hub-mcp"), runner)
     assert second["remote"] == bare_remote
     assert config.read_text(encoding="utf-8") == saved
-    assert json.loads(saved) == {"repo": str(runtime.resolve()), "remote": bare_remote}
+    data = json.loads(saved)
+    assert data["schema_version"] == 2 and data["default"] == "default"
+    assert data["profiles"] == {"default": {"repo": str(runtime.resolve()), "remote": bare_remote}}
 
 
 def test_setup_without_remote_creates_a_local_hub(
@@ -75,7 +82,7 @@ def test_setup_without_remote_creates_a_local_hub(
     assert (runtime / "memory" / "README.md").exists()
     assert (runtime / "memory" / "policy" / "tiers.yaml").exists()
     assert git(runtime, "status", "--porcelain", "--untracked-files=no") == ""
-    assert json.loads(config_path(fake_home).read_text(encoding="utf-8"))["remote"] is None
+    assert _configured_remote(fake_home) is None
     again = _setup(None, runtime, fake_home, which_for("agent-hub-mcp"), runner)
     assert again["remote"] is None and again["policy"] == "already-present"
 
@@ -93,7 +100,7 @@ def test_setup_local_detaches_remote_and_forgets_it(
     assert summary["remote_removed"] == bare_remote
     assert summary["doctor"]["remote"] is None
     assert git(runtime, "remote") == ""
-    assert json.loads(config_path(fake_home).read_text(encoding="utf-8"))["remote"] is None
+    assert _configured_remote(fake_home) is None
 
     # A plain re-run must stay local: the old remote is forgotten, not merely detached.
     again = _setup(None, runtime, fake_home, which_for("agent-hub-mcp"), runner)
@@ -135,7 +142,7 @@ def test_setup_attaches_a_remote_to_an_existing_local_hub(
     assert summary["doctor"]["remote"] == str(bare)
     assert git(runtime, "remote", "get-url", "origin") == str(bare)
     assert git(bare, "rev-parse", "main") == git(runtime, "rev-parse", "main")
-    assert json.loads(config_path(fake_home).read_text(encoding="utf-8"))["remote"] == str(bare)
+    assert _configured_remote(fake_home) == str(bare)
     hub_summary_after_claimless_mutation = Hub(runtime).ensure_policy()
     assert hub_summary_after_claimless_mutation is None
 
@@ -169,13 +176,15 @@ def test_setup_configures_tools_without_duplicating_entries(
     summary = _setup(bare_remote, runtime, fake_home, which, runner)
     assert summary["tools"] == {"codex": "configured", "claude": "configured"}
     for tool in ("codex", "claude"):
-        mcp_calls = [argv for argv in calls if argv[0] == tool]
+        mcp_calls = [
+            argv for argv in calls if argv[0] == tool and argv[1:3] != ["mcp", "get"]
+        ]
         assert [argv[:3] for argv in mcp_calls] == [
             [tool, "mcp", "remove"],
             [tool, "mcp", "add"],
         ]
         add = mcp_calls[1]
-        assert f"AGENT_HUB_REPO={runtime.resolve()}" in add
+        assert not any(arg.startswith("AGENT_HUB_REPO=") for arg in add)
         assert add[-1] == "/fake/bin/agent-hub-mcp"
     first_count = len(calls)
     _setup(None, runtime, fake_home, which, runner)
@@ -200,12 +209,17 @@ def test_setup_summary_matches_doctor_and_scan(
         "doctor",
         "scan",
         "remote_removed",
+        "profile",
+        "default_profile",
     }
+    assert summary["profile"] == "default" and summary["default_profile"] == "default"
     assert summary["remote_removed"] is None
     assert summary["ok"] is True
     assert summary["policy"] == "created"
     assert summary["scan"]["errors"] == 0
-    assert summary["doctor"] == doctor(Hub(runtime), home=fake_home)
+    expected = doctor(Hub(runtime, profile="default"), home=fake_home, which=which_for())
+    assert summary["doctor"] == expected
+    assert summary["doctor"]["mcp_pinned"] == []
     assert summary["doctor"]["codex_instructions"] is True
     again = _setup(None, runtime, fake_home, which_for("agent-hub-mcp"), runner)
     assert again["policy"] == "already-present"

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
-from agent_hub.policy import DEFAULT_POLICY_TEXT, parse_policy
+from agent_hub.hub import Hub
+from agent_hub.policy import DEFAULT_POLICY_TEXT, PolicyError, parse_policy, policy_path
 from agent_hub.state import State, validate_plan
 
 
@@ -76,3 +79,37 @@ def test_validate_plan_without_policy_accepts_any_tier_string() -> None:
     validate_plan(_plan("anything"))
     with pytest.raises(ValueError, match="must be a string"):
         validate_plan(_plan(["x"]))
+
+
+def test_ensure_policy_writes_and_publishes_default(hub_repo: Path) -> None:
+    hub = Hub(hub_repo)
+    assert hub.policy() is None
+    event = hub.ensure_policy()
+    assert event is not None and event["type"] == "policy_initialized"
+    assert policy_path(hub_repo).read_text(encoding="utf-8") == DEFAULT_POLICY_TEXT
+    assert hub.ensure_policy() is None
+    policy = hub.policy()
+    assert policy is not None and policy.default_task_tier == "standard"
+
+
+def test_scan_rejects_invalid_policy(policy_hub: Path) -> None:
+    hub = Hub(policy_hub)
+    assert hub.scan()["errors"] == 0
+    policy_path(policy_hub).write_text("schema_version: 1\n", encoding="utf-8")
+    with pytest.raises(PolicyError):
+        hub.scan()
+
+
+def test_draft_rejects_unknown_tier_when_policy_present(policy_hub: Path, tmp_path: Path) -> None:
+    plan = tmp_path / "tiered.yaml"
+    plan.write_text(
+        """id: tiered
+title: Tiered
+goal: g
+tasks:
+  - {id: a, title: A, project: acme-widgets, tier: cheap}
+""",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="unknown tier"):
+        Hub(policy_hub).draft_plan(plan, "codex", "draft")

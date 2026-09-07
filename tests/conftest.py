@@ -85,3 +85,13 @@ def project_paths(tmp_path: Path) -> tuple[Path, Path, Path]:
         project(tmp_path / "project-two"),
         project(tmp_path / "project-three", "https://github.com/example/other.git"),
     )
+
+
+@pytest.fixture
+def policy_hub(hub_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    from agent_hub.hub import Hub
+
+    monkeypatch.setenv("AGENT_HUB_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.delenv("AGENT_HUB_MODEL", raising=False)
+    Hub(hub_repo).ensure_policy()
+    return hub_repo

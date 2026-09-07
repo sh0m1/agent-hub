@@ -20,6 +20,14 @@ from .git import (
     sync_from_remote,
 )
 from .ids import event_id, normalize_remote, project_id_from_remote, slug
+from .policy import (
+    DEFAULT_POLICY_TEXT,
+    POLICY_RELATIVE_PATH,
+    TierPolicy,
+    load_policy,
+    parse_policy,
+    policy_path,
+)
 from .security import validate_content
 from .sessions import state_root
 from .state import PlanState, State, load_plan, load_state, validate_plan
@@ -105,6 +113,8 @@ class Hub:
         for path in files:
             content = path.read_text(encoding="utf-8")
             validate_content(content, path.name)
+            if path == policy_path(self.root):
+                parse_policy(content)
             if "/plans/" in path.as_posix() and path.suffix == ".yaml":
                 plan = yaml.safe_load(content)
                 if not isinstance(plan, dict):
@@ -112,6 +122,25 @@ class Hub:
                 validate_plan(plan)
         load_state(self.root)
         return {"files": len(files), "errors": 0}
+
+    def policy(self) -> TierPolicy | None:
+        return load_policy(self.root)
+
+    def ensure_policy(self) -> dict[str, Any] | None:
+        if policy_path(self.root).exists():
+            return None
+
+        def operation(_: State) -> tuple[dict[str, Any], str]:
+            path = policy_path(self.root)
+            if path.exists():
+                raise ValueError("Tier policy already exists")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(DEFAULT_POLICY_TEXT, encoding="utf-8")
+            event = self._base_event("policy_initialized", "human", "interactive")
+            event["payload"] = {"path": POLICY_RELATIVE_PATH.as_posix()}
+            return event, "hub: initialize tier policy"
+
+        return self._mutate(operation)
 
     def project_for_path(self, cwd: Path) -> tuple[str | None, str | None]:
         result = subprocess.run(
@@ -155,7 +184,7 @@ class Hub:
         plan = yaml.safe_load(text)
         if not isinstance(plan, dict):
             raise ValueError("Plan input must be a YAML object")
-        validate_plan(plan)
+        validate_plan(plan, self.policy())
         plan_id = slug(str(plan["id"]))
 
         def operation(_: State) -> tuple[dict[str, Any], str]:
